@@ -125,6 +125,32 @@ pip install "pyvterm[preview]"
 python examples/lissajous.py --preview lissajous.png
 ```
 
+### 3D rotating cube
+
+[`examples/cube3d.py`](examples/cube3d.py) flies a wireframe cube around the
+screen: it tumbles on all three axes, drifts along a Lissajous path, and swings
+toward and away from the viewer so perspective makes it loom up close and shrink
+into the distance. The projection is plain trigonometry — no numpy — so it runs
+from the **core package alone** (only `--preview` needs the preview extra).
+
+![3D rotating cube preview](docs/cube3d.png)
+
+*Animated preview (open the PNG to play it) rendered by `--preview` — exactly
+the vectors the device would draw, reconstructed from the wire bytes. The motion
+loops seamlessly over one `--period`.*
+
+```bash
+# On real hardware:
+python examples/cube3d.py --port /dev/ttyACM0
+
+# Without hardware (prints per-frame byte/vector counts and distance):
+python examples/cube3d.py --dry-run --frames 5
+
+# Render the animated PNG above (no hardware; needs the preview extra):
+pip install "pyvterm[preview]"
+python examples/cube3d.py --preview cube3d.png
+```
+
 ### 3D spectrum analyzer
 
 [`examples/spectrum3d.py`](examples/spectrum3d.py) is a real-time **3D waterfall
