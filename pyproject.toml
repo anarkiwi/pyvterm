@@ -41,6 +41,7 @@ dependencies = ["pyserial>=3.5"]
 # Live ALSA capture additionally needs `pyalsaaudio` (Linux only); install it
 # separately so the analyzer/preview extras stay cross-platform.
 analyzer = ["numpy>=1.21"]
+video = ["numpy>=1.21", "opencv-python>=4.5"]
 preview = ["numpy>=1.21", "pillow>=9.2"]
 dev = [
     "pytest>=7.0",

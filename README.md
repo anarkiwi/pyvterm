@@ -149,6 +149,36 @@ python examples/spectrum3d.py --synthetic --preview spectrum3d.png
 python examples/spectrum3d.py --synthetic --port /dev/ttyACM0
 ```
 
+### Rutt-Etra video scan processing
+
+[`examples/ruttetra.py`](examples/ruttetra.py) reads video with OpenCV (a file, a
+camera, or any `cv2.VideoCapture` source) and renders a [Rutt-Etra](https://en.wikipedia.org/wiki/Rutt/Etra_Video_Synthesizer)
+style scan: each frame is reduced to a coarse grid and every scan line is drawn
+as a polyline displaced vertically by luminance — a flat image becomes a 3D
+relief of horizontal lines, which is exactly what a vector display does best.
+
+![Rutt-Etra scan processing preview](docs/ruttetra.png)
+
+*Animated preview (open the PNG to play it) rendered by `--preview` from the
+built-in synthetic scene.*
+
+The Vectrex can only draw so many vectors per refresh, so the grid is kept
+small; turn `--cols` (horizontal resolution), `--rows` (scan lines / line
+spacing) and `--fps` down further if your display flickers.
+
+```bash
+# Live webcam to a real Vectrex (needs OpenCV):
+pip install "pyvterm[video]"
+python examples/ruttetra.py --video 0 --port /dev/ttyACM0
+
+# A video file, downscaled and slowed for the Vectrex:
+python examples/ruttetra.py --video clip.mp4 --cols 40 --rows 22 --fps 12 --port /dev/ttyACM0
+
+# No camera? Render the animated PNG above from the synthetic scene:
+pip install "pyvterm[preview]"
+python examples/ruttetra.py --synthetic --preview ruttetra.png
+```
+
 ## Connecting to the hardware
 
 pyvterm just needs a serial port that reaches the PiTrex. The PiTrex hosts a
