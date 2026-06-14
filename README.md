@@ -156,13 +156,17 @@ python examples/cube3d.py --preview cube3d.png
 [`examples/spectrum3d.py`](examples/spectrum3d.py) is a real-time **3D waterfall
 spectrum analyzer**: it captures live audio (ALSA), runs an FFT each frame, and
 draws frequency across X, magnitude as height, and time receding into the
-distance.
+distance. The slab is viewed through an **orbiting camera** that is never quite
+still — it drifts slowly in steady state, and when the audio makes a **major
+change** (an onset or new texture, detected via spectral flux) it sweeps round
+to a fresh viewpoint. Pass `--no-rotate` for a fixed head-on view.
 
 ![3D waterfall spectrum analyzer preview](docs/spectrum3d.png)
 
 *Animated preview (open the PNG to play it) rendered by `--preview` from the
 built-in synthetic source — exactly the vectors the device would draw,
-reconstructed from the wire bytes.*
+reconstructed from the wire bytes. Watch the camera swing to a new angle each
+time the spectrum shifts.*
 
 ```bash
 # Live, visualising the default output by tapping its monitor
