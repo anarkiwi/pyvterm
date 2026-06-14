@@ -139,14 +139,56 @@ python examples/spectrum3d.py --synthetic --preview spectrum3d.png
 python examples/spectrum3d.py --synthetic --port /dev/ttyACM0
 ```
 
-## Hardware notes
+## Connecting to the hardware
 
-- The PiTrex/USB-DVG enumerates as a USB-CDC ACM device: `/dev/ttyACM0` (Linux),
-  `/dev/tty.usbmodemXXXX` (macOS), or `COMx` (Windows).
-- The nominal line rate is 2 Mbaud. USB-CDC ignores the rate, but pyvterm requests it
-  to match the reference driver.
-- On open, `SerialTransport` waits ~2 s before flushing (the reference driver does the
-  same "to make flush work, for some reason"). Pass `settle=0` to skip it.
+pyvterm just needs a serial port that reaches the PiTrex. The PiTrex hosts a
+Raspberry Pi Zero on its GPIO header, and there are two places to attach a host
+link — the [**PiTrex Developer Release Hardware Guide**][hwguide] is the
+authoritative reference for the header location and exact wiring.
+
+- **USB gadget port (simplest, easily fast enough).** The Pi Zero's *data*
+  micro-USB port — the inner one marked **USB**, not **PWR** — can act as a
+  USB-CDC serial gadget and shows up on your PC as `/dev/ttyACM0`, pyvterm's
+  default port. USB-CDC ignores the line rate, so the nominal 2 Mbaud is met with
+  room to spare and **no serial adapter is required** — just a micro-USB-to-USB-A
+  *data* cable. Remove the **POWER FROM VEC.** jumper first, since the PC then
+  supplies power.
+- **GPIO UART header.** Alternatively wire a USB-to-TTL adapter to the Pi Zero
+  header pins **1 (3.3 V), 6 (GND), 8 (Tx, GPIO14), 10 (Rx, GPIO15)**, crossing
+  Tx↔Rx, and set `enable_uart=1` in `config.txt` (this is the guide's documented
+  serial-console path). Going this route, the adapter itself must keep up.
+
+### Choosing a USB-to-serial adapter
+
+For the GPIO-UART route the adapter has to satisfy two hard requirements:
+
+- **3.3 V logic levels — never 5 V** (5 V on the Pi's pins will damage it).
+- **Sustain ≥ 2 Mbaud**, the protocol's line rate.
+
+A genuine **FTDI FT232R**-based 3.3 V adapter is the safe pick — it is rated to
+3 Mbaud, comfortably above the 2 Mbaud the protocol asks for:
+
+- [FTDI **TTL-232R-3V3**](https://ftdichip.com/wp-content/uploads/2023/07/DS_TTL-232R_CABLES.pdf)
+  — 3.3 V FT232R USB-to-TTL cable (datasheet; rated to 3 Mbaud). Choose the
+  0.1″-socket variant so it drops onto the header pins.
+- [Adafruit **FTDI Friend**](https://www.adafruit.com/product/284) — FT232RL,
+  switchable to 3.3 V.
+- A **Silicon Labs CP2102N** board (rated to 3 Mbaud) is a fine alternative.
+
+Avoid low-cost **CH340** modules and anything labelled only **CP2102** (the
+original tops out near 1 Mbaud) — they are unreliable at 2 Mbaud. The USB gadget
+port above sidesteps the line-rate question entirely, so it's the recommended
+path unless you specifically need the UART pins.
+
+[hwguide]: http://www.ombertech.com/cnk/pitrex/wiki/index.php?wiki=Developer_Release_HW_Guide
+
+### Notes
+
+- Host device path: `/dev/ttyACM0` (Linux), `/dev/tty.usbmodem*` (macOS), or
+  `COMx` (Windows).
+- `SerialTransport` waits ~2 s after opening before flushing buffers (the
+  reference driver does the same "to make flush work, for some reason"); pass
+  `settle=0` to skip it.
 
 ## Development
 
