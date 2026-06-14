@@ -35,7 +35,7 @@ from __future__ import annotations
 import argparse
 import math
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -46,9 +46,7 @@ from pyvterm import (
     Bounds,
     MemoryTransport,
     VectorTerminal,
-    protocol,
 )
-from pyvterm.protocol import DVG_RES_MAX, Flag
 
 # --- defaults -------------------------------------------------------------
 
@@ -239,58 +237,6 @@ class Waterfall3D:
 # --- animated-PNG preview -------------------------------------------------
 
 
-def _decode_segments(frame: bytes) -> list[tuple[int, int, int, int, int]]:
-    """Decode a pyvterm frame into lit segments ``(x0, y0, x1, y1, intensity)``.
-
-    Coordinates are device space (0..4095). This is exactly what the device's
-    beam would draw, reconstructed from the wire bytes.
-    """
-    segments: list[tuple[int, int, int, int, int]] = []
-    pen_x = pen_y = 0
-    intensity = 0
-    for i in range(0, len(frame), 4):
-        word = int.from_bytes(frame[i : i + 4], "big")
-        info = protocol.decode_word(word)
-        if info["flag"] is Flag.RGB:
-            intensity = max(info["r"], info["g"], info["b"])
-        elif info["flag"] is Flag.XY:
-            x, y = info["x"], info["y"]
-            if not info["blank"] and intensity > 0:
-                segments.append((pen_x, pen_y, x, y, intensity))
-            pen_x, pen_y = x, y
-    return segments
-
-
-def _rasterize(segments: Iterable[tuple[int, int, int, int, int]], width: int, height: int):
-    """Rasterize device-space segments into a glowing RGB frame (PIL Image)."""
-    from PIL import Image, ImageDraw, ImageFilter
-
-    core = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(core)
-    sx = (width - 1) / DVG_RES_MAX
-    sy = (height - 1) / DVG_RES_MAX
-    for x0, y0, x1, y1, intensity in segments:
-        value = 90 + int(165 * intensity / 255)  # device y grows upward -> flip
-        draw.line(
-            (x0 * sx, (height - 1) - y0 * sy, x1 * sx, (height - 1) - y1 * sy),
-            fill=value,
-            width=1,
-        )
-
-    base = np.asarray(core, dtype=np.float32) / 255.0
-    glow1 = np.asarray(core.filter(ImageFilter.GaussianBlur(2.0)), dtype=np.float32) / 255.0
-    glow2 = np.asarray(core.filter(ImageFilter.GaussianBlur(5.0)), dtype=np.float32) / 255.0
-    intensity_map = np.clip(base + 0.8 * glow1 + 0.5 * glow2 - 0.05, 0.0, 1.5)
-    hot = np.clip((base - 0.45) * 2.2, 0.0, 1.0)  # white-hot line cores
-
-    rgb = np.zeros((height, width, 3), dtype=np.float32)
-    rgb[..., 0] = 0.18 * intensity_map + 0.9 * hot  # phosphor: green-cyan glow,
-    rgb[..., 1] = 1.00 * intensity_map + 0.5 * hot  # white-hot cores
-    rgb[..., 2] = 0.55 * intensity_map + 0.9 * hot
-    out = (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
-    return Image.fromarray(out, mode="RGB")
-
-
 def render_preview(
     path: str,
     source: SyntheticSource | AlsaSource,
@@ -301,26 +247,17 @@ def render_preview(
     width: int,
     height: int,
 ) -> None:
-    terminal = VectorTerminal(transport=MemoryTransport())
-    images = []
+    """Capture ``frames`` frames and save them as an animated PNG."""
+    from pyvterm.preview import PreviewTransport
+
+    terminal = VectorTerminal(transport=PreviewTransport(width=width, height=height))
     print(f"Rendering {frames} frames to {path} ...")
     for _ in range(frames):
         waterfall.push(analyzer.process(source.read_frame()))
         with terminal.frame():
             waterfall.draw(terminal)
-        data = terminal.transport.frames[-1]  # type: ignore[attr-defined]
-        images.append(_rasterize(_decode_segments(data), width, height))
-
-    duration = int(1000 / fps) if fps > 0 else 50
-    images[0].save(
-        path,
-        save_all=True,
-        append_images=images[1:],
-        duration=duration,
-        loop=0,
-        format="PNG",
-    )
-    print(f"Wrote {path} ({len(images)} frames, {width}x{height}, {duration} ms/frame)")
+    saved = terminal.transport.save_apng(path, fps=fps)  # type: ignore[attr-defined]
+    print(f"Wrote {path} ({saved} frames, {width}x{height})")
 
 
 # --- CLI ------------------------------------------------------------------

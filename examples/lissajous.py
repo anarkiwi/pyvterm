@@ -73,11 +73,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="don't open a serial port; print frame sizes instead",
     )
+    parser.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
+    parser.add_argument("--width", type=int, default=440, help="preview width (px)")
+    parser.add_argument("--height", type=int, default=330, help="preview height (px)")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    if args.preview:
+        from pyvterm.preview import PreviewTransport
+
+        n_frames = args.frames or 120
+        terminal = VectorTerminal(transport=PreviewTransport(width=args.width, height=args.height))
+        print(f"Rendering {n_frames} frames to {args.preview} ...")
+        for i in range(n_frames):
+            # Sweep the phase through a full turn so the loop is seamless.
+            delta = 2.0 * math.pi * i / n_frames
+            points = lissajous_points(args.a, args.b, delta, args.samples, args.amp_x, args.amp_y)
+            with terminal.frame():
+                terminal.set_intensity(args.intensity)
+                terminal.polyline(points)
+        saved = terminal.transport.save_apng(args.preview, fps=args.fps)  # type: ignore[attr-defined]
+        print(f"Wrote {args.preview} ({saved} frames, {args.width}x{args.height})")
+        return 0
 
     if args.dry_run:
         terminal = VectorTerminal(transport=MemoryTransport())

@@ -55,17 +55,6 @@ def test_waterfall_rows_and_depth_cue():
     assert all(3 <= intensity <= 15 for intensity, _ in rows)
 
 
-def test_decode_segments_round_trip():
-    from pyvterm import MemoryTransport, VectorTerminal
-
-    vt = VectorTerminal(transport=MemoryTransport())
-    vt.set_intensity(15)
-    vt.polyline([(0, 0), (100, 0)])
-    frame = vt.send_frame()
-    segments = spectrum3d._decode_segments(frame)
-    assert segments == [(2049, 2050, 2449, 2050, 240)]
-
-
 def test_main_dry_run_synthetic_returns_zero():
     assert spectrum3d.main(["--synthetic", "--dry-run", "--frames", "3", "--fps", "0"]) == 0
 

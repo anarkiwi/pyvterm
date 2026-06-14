@@ -95,7 +95,9 @@ with colour vector monitors.)
 Lower-level building blocks are exposed too: `pyvterm.protocol` (pure word
 encoders/decoders), `pyvterm.geometry` (clipping), `FrameBuilder` (assemble a frame
 to bytes without any I/O), and the `Transport` hierarchy
-(`SerialTransport`, `MemoryTransport`).
+(`SerialTransport`, `MemoryTransport`). The optional `pyvterm.preview` module
+(`pip install "pyvterm[preview]"`) decodes frames back into beam segments and
+renders them to images or animated PNGs — handy for previewing without hardware.
 
 ## Examples
 
@@ -104,12 +106,20 @@ to bytes without any I/O), and the `Transport` hierarchy
 [`examples/lissajous.py`](examples/lissajous.py) animates Lissajous curves on the
 display:
 
+![Lissajous curve preview](docs/lissajous.png)
+
+*Animated preview (open the PNG to play it) rendered by `--preview`.*
+
 ```bash
 # On real hardware:
 python examples/lissajous.py --port /dev/ttyACM0
 
 # Without hardware (prints per-frame byte counts):
 python examples/lissajous.py --dry-run --frames 5
+
+# Render the animated PNG above (no hardware; needs the preview extra):
+pip install "pyvterm[preview]"
+python examples/lissajous.py --preview lissajous.png
 ```
 
 ### 3D spectrum analyzer
