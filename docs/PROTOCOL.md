@@ -265,6 +265,12 @@ For mapping to `pyvterm`, the sender surface in `zvgFrame.h` is:
 | `zvgFrameSend()` | serialise + transmit the frame | `.send_frame` |
 | `zvgFrameClose()` | send `EXIT`, close the port | `.close` |
 
+## See also
+
+* [`PROTOCOL-EXTENSIONS.md`](PROTOCOL-EXTENSIONS.md) — a design proposal for
+  backward-compatible extensions (`STRIP`, `HEIGHTFIELD`, temporal deltas)
+  better suited to streaming structured, high-vector-count content.
+
 ## References
 
 * PiTrex sender — `VMMenu/Win32/dvg/zvgFrame.c`, `zvgFrame.h`

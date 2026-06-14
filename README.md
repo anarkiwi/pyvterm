@@ -12,7 +12,10 @@ custom [MAME](https://www.mamedev.org/) build uses to push vector frames to a Ve
 through the PiTrex. With pyvterm your Python program *becomes* the "custom MAME": you
 build a frame of vectors and stream it to real hardware over a serial link.
 
-The protocol is documented in full in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+The protocol is documented in full in [`docs/PROTOCOL.md`](docs/PROTOCOL.md);
+[`docs/PROTOCOL-EXTENSIONS.md`](docs/PROTOCOL-EXTENSIONS.md) proposes
+backward-compatible extensions for streaming structured, high-vector-count
+content (raster video, spectra, parametric curves).
 
 ---
 
