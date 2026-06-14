@@ -59,6 +59,8 @@ jobs:
         run: pytest --cov=pyvterm --cov-report=term-missing
       - name: lissajous example smoke test
         run: python examples/lissajous.py --dry-run --frames 3 --fps 0
+      - name: spectrum3d example smoke test
+        run: python examples/spectrum3d.py --synthetic --dry-run --frames 3 --fps 0
 
   build:
     name: Build distribution

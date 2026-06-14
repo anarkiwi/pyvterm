@@ -38,6 +38,10 @@ classifiers = [
 dependencies = ["pyserial>=3.5"]
 
 [project.optional-dependencies]
+# Live ALSA capture additionally needs `pyalsaaudio` (Linux only); install it
+# separately so the analyzer/preview extras stay cross-platform.
+analyzer = ["numpy>=1.21"]
+preview = ["numpy>=1.21", "pillow>=9.2"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -46,6 +50,8 @@ dev = [
     "types-pyserial",
     "build>=1.0",
     "twine>=5.0",
+    "numpy>=1.21",
+    "pillow>=9.2",
 ]
 
 [project.urls]

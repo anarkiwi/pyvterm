@@ -97,7 +97,9 @@ encoders/decoders), `pyvterm.geometry` (clipping), `FrameBuilder` (assemble a fr
 to bytes without any I/O), and the `Transport` hierarchy
 (`SerialTransport`, `MemoryTransport`).
 
-## Example: Lissajous patterns
+## Examples
+
+### Lissajous patterns
 
 [`examples/lissajous.py`](examples/lissajous.py) animates Lissajous curves on the
 display:
@@ -108,6 +110,33 @@ python examples/lissajous.py --port /dev/ttyACM0
 
 # Without hardware (prints per-frame byte counts):
 python examples/lissajous.py --dry-run --frames 5
+```
+
+### 3D spectrum analyzer
+
+[`examples/spectrum3d.py`](examples/spectrum3d.py) is a real-time **3D waterfall
+spectrum analyzer**: it captures live audio (ALSA), runs an FFT each frame, and
+draws frequency across X, magnitude as height, and time receding into the
+distance.
+
+![3D waterfall spectrum analyzer preview](docs/spectrum3d.png)
+
+*Animated preview (open the PNG to play it) rendered by `--preview` from the
+built-in synthetic source — exactly the vectors the device would draw,
+reconstructed from the wire bytes.*
+
+```bash
+# Live, visualising the default output by tapping its monitor
+# (Linux; needs pyalsaaudio):
+pip install "pyvterm[analyzer]" pyalsaaudio
+PULSE_SOURCE=@DEFAULT_SINK@.monitor python examples/spectrum3d.py --device pulse
+
+# No hardware? Render the animated PNG above from synthetic audio:
+pip install "pyvterm[preview]"
+python examples/spectrum3d.py --synthetic --preview spectrum3d.png
+
+# Or just stream synthetic audio to a real Vectrex:
+python examples/spectrum3d.py --synthetic --port /dev/ttyACM0
 ```
 
 ## Hardware notes
