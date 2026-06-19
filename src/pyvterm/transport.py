@@ -12,6 +12,8 @@ import abc
 import time
 from typing import Any, Callable
 
+from . import protocol
+
 __all__ = [
     "Transport",
     "MemoryTransport",
@@ -40,6 +42,10 @@ class Transport(abc.ABC):
     def read(self, size: int = 1) -> bytes:
         """Read up to ``size`` bytes (default: not supported, returns empty)."""
         return b""
+
+    def probe_capabilities(self) -> protocol.HelloDescriptor | None:
+        """Probe for a v2 (vekterm) device. Base transports can't, so ``None``."""
+        return None
 
     def flush(self) -> None:  # noqa: B027 - optional no-op hook, not abstract
         """Block until buffered output has been transmitted."""
@@ -163,6 +169,31 @@ class SerialTransport(Transport):
             fn = getattr(self._serial, method, None)
             if callable(fn):
                 fn()
+
+    def probe_capabilities(self) -> protocol.HelloDescriptor | None:
+        """Write the ``HELLO`` probe and read the device's capability descriptor.
+
+        Returns a :class:`~pyvterm.protocol.HelloDescriptor` if a vekterm v2
+        device answers within ``sync_timeout``, else ``None`` (a plain USB-DVG,
+        or nothing — the caller then stays on the base protocol). Any
+        flow-control sync byte seen meanwhile is noted, so a later frame's
+        handshake isn't fooled into streaming.
+        """
+        self._serial.write(protocol.hello_word())
+        deadline = time.monotonic() + self.sync_timeout
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            waiting = getattr(self._serial, "in_waiting", 0) or 1
+            chunk = self._serial.read(waiting)
+            if not chunk:
+                continue
+            if self.flow_control is not None and self.flow_control in chunk:
+                self._flow_seen = True
+            buf += chunk
+            descriptor = protocol.decode_hello_descriptor(bytes(buf))
+            if descriptor is not None:
+                return descriptor
+        return None
 
     def _wait_ready(self) -> bool:
         """Block until the receiver sends the flow-control sync byte.
