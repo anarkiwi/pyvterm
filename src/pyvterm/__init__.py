@@ -19,7 +19,7 @@ For tests and dry runs, pass a :class:`MemoryTransport` instead of a port.
 
 from __future__ import annotations
 
-from . import geometry, protocol
+from . import ext, geometry, protocol
 from .frame import FrameBuilder
 from .geometry import clip_line, vector_length
 from .protocol import (
@@ -28,7 +28,10 @@ from .protocol import (
     DVG_RES_MAX,
     DVG_RES_MIN,
     Bounds,
+    Capability,
+    ExtSubtype,
     Flag,
+    HelloDescriptor,
 )
 from .terminal import VectorTerminal
 from .transport import (
@@ -57,7 +60,11 @@ __all__ = [
     # protocol + geometry
     "protocol",
     "geometry",
+    "ext",
     "Flag",
+    "ExtSubtype",
+    "Capability",
+    "HelloDescriptor",
     "Bounds",
     "DEFAULT_BOUNDS",
     "DVG_RES_MIN",

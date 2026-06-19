@@ -54,6 +54,20 @@ __all__ = [
     "quality",
     "complete",
     "exit_command",
+    # v2 extensions (docs/PROTOCOL-EXTENSIONS.md)
+    "ExtSubtype",
+    "Capability",
+    "EXT_SUBTYPE_SHIFT",
+    "EXT_LENGTH_MASK",
+    "CMD_HELLO",
+    "HELLO_MAGIC",
+    "HELLO_LENGTH",
+    "PROTOCOL_VERSION",
+    "encode_ext_header",
+    "encode_hello_word",
+    "hello_word",
+    "HelloDescriptor",
+    "decode_hello_descriptor",
 ]
 
 
@@ -65,7 +79,8 @@ class Flag(IntEnum):
     XY = 0x2  #: Move (beam off) or draw (beam on) to a coordinate.
     QUALITY = 0x3  #: Render-quality hint (pitrex/zvgFrame variant).
     FRAME = 0x4  #: Frame header carrying total beam-travel length.
-    CMD = 0x5  #: Device command channel (AdvanceMAME; e.g. GET_DVG_INFO).
+    CMD = 0x5  #: Device command channel (AdvanceMAME GET_DVG_INFO; vekterm HELLO).
+    EXT = 0x6  #: v2 extensions container (see ``docs/PROTOCOL-EXTENSIONS.md``).
     EXIT = 0x7  #: Tell the device the session is over.
 
 
@@ -85,6 +100,40 @@ DVG_RENDER_QUALITY = 5  #: Default quality value sent once per frame.
 
 #: OR'd into a ``COMPLETE`` word to flag a black & white game (AdvanceMAME).
 COMPLETE_MONOCHROME = 1 << 28
+
+# --- v2 extensions (docs/PROTOCOL-EXTENSIONS.md) --------------------------
+
+PROTOCOL_VERSION = 2  #: vekterm protocol version advertised in the HELLO reply.
+
+EXT_SUBTYPE_SHIFT = 24  #: The EXT subtype occupies bits [28:24].
+EXT_SUBTYPE_MASK = 0x1F  #: 5-bit subtype.
+EXT_LENGTH_MASK = (1 << EXT_SUBTYPE_SHIFT) - 1  #: 0xFFFFFF — 24-bit payload length.
+
+
+class ExtSubtype(IntEnum):
+    """Subtype selector inside an ``EXT`` container word."""
+
+    HEIGHTFIELD = 0x01  #: Gridded scan; X implicit, ~1 byte/point.
+    POLYLINE = 0x02  #: Absolute anchor + signed deltas, ~2 bytes/point.
+    HEIGHTFIELD_DELTA = 0x03  #: Reserved (temporal delta, not implemented).
+
+
+class Capability(IntEnum):
+    """Bits of the HELLO descriptor's capability bitmap."""
+
+    HEIGHTFIELD = 0x01
+    POLYLINE = 0x02
+    INTENSITY = 0x04  #: Per-point intensity planes are honoured.
+    FRAME_DELTA = 0x08  #: Reserved (temporal delta).
+
+
+#: Subcommand byte of the ``CMD`` capability probe (``'V'``), distinct from
+#: AdvanceMAME's ``GET_DVG_INFO = 1``.
+CMD_HELLO = 0x56
+#: First two bytes of the HELLO reply, identifying a vekterm device.
+HELLO_MAGIC = b"VK"
+#: Total length of the fixed binary HELLO descriptor.
+HELLO_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -196,6 +245,71 @@ def decode_word(word: int) -> dict[str, Any]:
     elif flag is Flag.COMPLETE:
         info["monochrome"] = bool(word & COMPLETE_MONOCHROME)
     return info
+
+
+# --- v2 extensions: EXT container + HELLO negotiation ---------------------
+
+
+def encode_ext_header(subtype: int, length: int) -> bytes:
+    """4 big-endian bytes for an ``EXT`` container header.
+
+    ``subtype`` selects the payload format (:class:`ExtSubtype`); ``length`` is
+    the number of byte-packed payload bytes that follow the header.
+    """
+    word = (
+        (Flag.EXT << FLAG_SHIFT)
+        | ((subtype & EXT_SUBTYPE_MASK) << EXT_SUBTYPE_SHIFT)
+        | (length & EXT_LENGTH_MASK)
+    )
+    return pack_word(word)
+
+
+def encode_hello_word() -> int:
+    """Encode the ``CMD`` capability-probe word a sender writes to detect vekterm."""
+    return (Flag.CMD << FLAG_SHIFT) | CMD_HELLO
+
+
+def hello_word() -> bytes:
+    """4 bytes for the capability probe (``encode_hello_word`` packed)."""
+    return pack_word(encode_hello_word())
+
+
+@dataclass(frozen=True)
+class HelloDescriptor:
+    """A decoded vekterm ``HELLO`` reply (capability descriptor)."""
+
+    version: int
+    capabilities: int
+    coord_bits: int
+    brightness_bits: int
+    max_pipeline: int
+    max_payload: int
+    refresh_hz: int
+
+    def supports(self, capability: Capability) -> bool:
+        """True if ``capability`` is advertised in the bitmap."""
+        return bool(self.capabilities & capability)
+
+
+def decode_hello_descriptor(data: bytes) -> HelloDescriptor | None:
+    """Decode a 12-byte ``HELLO`` descriptor, or ``None`` if it is malformed.
+
+    ``data`` may contain leading bytes (e.g. flow-control ``0x06``); the magic
+    ``VK`` is located first, so a caller can hand over whatever it read.
+    """
+    idx = data.find(HELLO_MAGIC)
+    if idx < 0 or len(data) - idx < HELLO_LENGTH:
+        return None
+    d = data[idx : idx + HELLO_LENGTH]
+    return HelloDescriptor(
+        version=d[2],
+        capabilities=d[3],
+        coord_bits=d[4],
+        brightness_bits=d[5],
+        max_pipeline=(d[6] << 8) | d[7],
+        max_payload=(d[8] << 8) | d[9],
+        refresh_hz=d[10],
+    )
 
 
 # --- Byte-producing convenience wrappers ----------------------------------

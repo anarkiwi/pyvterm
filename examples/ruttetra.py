@@ -37,7 +37,16 @@ import time
 
 import numpy as np
 
-from pyvterm import DEFAULT_BAUDRATE, DEFAULT_PORT, MemoryTransport, VectorTerminal
+from pyvterm import (
+    DEFAULT_BAUDRATE,
+    DEFAULT_PORT,
+    DVG_RES_MAX,
+    Capability,
+    MemoryTransport,
+    VectorTerminal,
+    ext,
+)
+from pyvterm.protocol import scale_color
 
 # Screen rectangle the relief is drawn into (host units; bounds are
 # X[-512, 511], Y[-384, 383]). Headroom is left at the top for displacement.
@@ -217,6 +226,53 @@ class RuttEtra:
             vectors += len(run) - 1
         return vectors
 
+    def heightfield_kwargs(self, frame: np.ndarray, bounds, *, serpentine: bool) -> dict:
+        """Build :meth:`VectorTerminal.send_heightfield` kwargs for a frame.
+
+        The relief is a function of luminance over a *uniform* grid (so, unlike
+        :meth:`draw`, perspective ``--depth`` is dropped); dark cells below
+        ``--threshold`` become intensity-0 points the receiver skips for free.
+        """
+        small = self._reduce(frame)
+        rows, cols = small.shape
+        last_col = (cols - 1) or 1
+        last_row = (rows - 1) or 1
+        x0 = bounds.conv_x(-X_HALF)
+        x_step = round((bounds.conv_x(X_HALF) - x0) / last_col)
+        y0 = bounds.conv_y(Y_TOP)
+        y_step = round((bounds.conv_y(Y_BOTTOM) - y0) / last_row)
+        # Full-scale (lum=1) displacement in device units; y_scale maps a 0..255
+        # displacement byte onto it via (d * y_scale) >> 8.
+        disp_dev = self.displacement * DVG_RES_MAX / bounds.height
+        y_scale = max(0, min(0xFFFF, round(disp_dev * 256 / 255)))
+        brightness = scale_color(self.intensity)
+        disp = np.clip(small * 255.0, 0, 255).round().astype(np.uint8)
+        intensity = None
+        if self.threshold > 0:
+            lit = small >= self.threshold
+            intensity = np.where(lit, brightness, 0).astype(np.uint8).tobytes()
+        return {
+            "cols": cols,
+            "rows": rows,
+            "x0": x0,
+            "x_step": x_step,
+            "y0": y0,
+            "y_step": y_step,
+            "y_scale": y_scale,
+            "displacement": disp.tobytes(),
+            "brightness": brightness,
+            "intensity": intensity,
+            "serpentine": serpentine,
+        }
+
+    def draw_heightfield(
+        self, terminal: VectorTerminal, frame: np.ndarray, *, serpentine: bool
+    ) -> dict:
+        """Send a frame as a HEIGHTFIELD; returns the kwargs used (for reporting)."""
+        kwargs = self.heightfield_kwargs(frame, terminal.bounds, serpentine=serpentine)
+        terminal.send_heightfield(**kwargs)
+        return kwargs
+
 
 # --- CLI ------------------------------------------------------------------
 
@@ -255,6 +311,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     grid.add_argument("--invert", action="store_true", help="invert luminance")
     grid.add_argument("--intensity", type=int, default=13, help="beam brightness 0-15")
+
+    v2 = parser.add_argument_group("v2 protocol (docs/PROTOCOL-EXTENSIONS.md)")
+    v2.add_argument(
+        "--heightfield",
+        action="store_true",
+        help="encode each frame as a HEIGHTFIELD (compact ~1 byte/point; uniform grid)",
+    )
+    v2.add_argument(
+        "--serpentine",
+        action="store_true",
+        help="with --heightfield, scan alternate rows in reverse (shorter beam retrace)",
+    )
 
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
@@ -299,8 +367,13 @@ def main(argv: list[str] | None = None) -> int:
             frame = source.read()
             if frame is None:
                 break
-            with terminal.frame():
-                processor.draw(terminal, frame)
+            if args.heightfield:
+                # PreviewTransport speaks base protocol, so this renders the
+                # software-fallback expansion of the HEIGHTFIELD.
+                processor.draw_heightfield(terminal, frame, serpentine=args.serpentine)
+            else:
+                with terminal.frame():
+                    processor.draw(terminal, frame)
         saved = terminal.transport.save_apng(args.preview, fps=args.fps)  # type: ignore[attr-defined]
         source.close()
         print(f"Wrote {args.preview} ({saved} frames, {args.width}x{args.height})")
@@ -312,20 +385,42 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
         terminal = VectorTerminal(port=args.port, baudrate=args.baud)
+        # Detect a v2 (vekterm) device so --heightfield can use the compact EXT
+        # path; a plain USB-DVG leaves capabilities None and we fall back.
+        desc = terminal.negotiate()
+        if desc is not None:
+            print(f"Detected vekterm v{desc.version}; capabilities=0x{desc.capabilities:02x}")
+        elif args.heightfield:
+            print("No v2 device detected; --heightfield will fall back to base XY frames.")
+
+    if args.heightfield and not terminal.supports(Capability.HEIGHTFIELD):
+        print("(heightfield encoded then expanded to base XY — no on-wire savings without vekterm)")
 
     period = 1.0 / args.fps if args.fps > 0 else 0.0
     drawn = 0
+    kwargs: dict = {}
     try:
         while args.frames == 0 or drawn < args.frames:
             frame = source.read()
             if frame is None:
                 print("End of video.")
                 break
-            with terminal.frame():
-                vectors = processor.draw(terminal, frame)
+            if args.heightfield:
+                kwargs = processor.draw_heightfield(terminal, frame, serpentine=args.serpentine)
+                vectors = kwargs["cols"] * kwargs["rows"]
+            else:
+                with terminal.frame():
+                    vectors = processor.draw(terminal, frame)
             if args.dry_run:
                 last = terminal.transport.frames[-1]  # type: ignore[attr-defined]
-                print(f"frame {drawn:>4}: {len(last):>5} bytes, {vectors} vectors")
+                if args.heightfield:
+                    ext_bytes = ext.wrap_ext_frame(ext.encode_heightfield(**kwargs))
+                    print(
+                        f"frame {drawn:>4}: heightfield {len(ext_bytes):>5} B (EXT) vs "
+                        f"{len(last):>5} B (base XY), {vectors} points"
+                    )
+                else:
+                    print(f"frame {drawn:>4}: {len(last):>5} bytes, {vectors} vectors")
             drawn += 1
             if period:
                 time.sleep(period)

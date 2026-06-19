@@ -22,9 +22,9 @@ import contextlib
 from collections.abc import Iterator
 from typing import Any
 
-from . import protocol
+from . import ext, protocol
 from .frame import FrameBuilder
-from .protocol import DEFAULT_BOUNDS, DVG_RENDER_QUALITY, Bounds
+from .protocol import DEFAULT_BOUNDS, DVG_RENDER_QUALITY, Bounds, Capability, HelloDescriptor
 from .transport import DEFAULT_BAUDRATE, DEFAULT_PORT, SerialTransport, Transport
 
 __all__ = ["VectorTerminal"]
@@ -51,11 +51,13 @@ class VectorTerminal:
         clip_window: Window | None = None,
         quality: int = DVG_RENDER_QUALITY,
         monochrome: bool = False,
+        suppress_duplicates: bool = False,
         **serial_kwargs: Any,
     ) -> None:
         if transport is None:
             transport = SerialTransport(port or DEFAULT_PORT, baudrate, **serial_kwargs)
         self.transport = transport
+        self.bounds = bounds
         self._frame = FrameBuilder(
             bounds=bounds,
             clip_window=clip_window,
@@ -63,6 +65,15 @@ class VectorTerminal:
             monochrome=monochrome,
         )
         self._pen: tuple[float, float] = (0.0, 0.0)
+        #: When set, :meth:`send_frame` skips transmitting a frame byte-identical
+        #: to the last one sent — the cheapest temporal delta (see §6 of
+        #: ``docs/PROTOCOL-EXTENSIONS.md``).
+        self.suppress_duplicates = suppress_duplicates
+        self._last_sent: bytes | None = None
+        #: Diagnostics: frames suppressed because they matched the previous one.
+        self.frames_suppressed = 0
+        #: Capabilities advertised by the device, populated by :meth:`negotiate`.
+        self.capabilities: HelloDescriptor | None = None
 
     @classmethod
     def open(
@@ -126,7 +137,33 @@ class VectorTerminal:
             self._pen = points[0] if closed else points[-1]
         return self
 
+    # -- negotiation -------------------------------------------------------
+
+    def negotiate(self) -> HelloDescriptor | None:
+        """Probe the device and record its v2 capabilities (or ``None``).
+
+        Safe to call against any device: a plain USB-DVG (or nothing) leaves
+        :attr:`capabilities` as ``None`` and the terminal stays on the base
+        protocol.
+        """
+        self.capabilities = self.transport.probe_capabilities()
+        return self.capabilities
+
+    def supports(self, capability: Capability) -> bool:
+        """True if the negotiated device advertised ``capability``."""
+        return self.capabilities is not None and self.capabilities.supports(capability)
+
     # -- transmission ------------------------------------------------------
+
+    def _transmit(self, data: bytes) -> bytes:
+        """Write one frame's bytes, honouring duplicate suppression."""
+        if self.suppress_duplicates and data == self._last_sent:
+            self.frames_suppressed += 1
+            return data
+        self.transport.write(data)
+        self.transport.flush()
+        self._last_sent = data
+        return data
 
     def send_frame(self) -> bytes:
         """Serialise and transmit the frame, then reset for the next one.
@@ -134,10 +171,90 @@ class VectorTerminal:
         Returns the exact bytes written (handy for tests and dry runs).
         """
         data = self._frame.to_bytes()
-        self.transport.write(data)
-        self.transport.flush()
+        self._transmit(data)
         self._frame.reset()
         return data
+
+    def send_heightfield(
+        self,
+        cols: int,
+        rows: int,
+        x0: int,
+        x_step: int,
+        y0: int,
+        y_step: int,
+        y_scale: int,
+        displacement: Any,
+        brightness: int,
+        *,
+        intensity: Any | None = None,
+        serpentine: bool = False,
+    ) -> bytes:
+        """Transmit a gridded scan as a ``HEIGHTFIELD`` frame (device coords).
+
+        Sends the compact ``EXT`` command when the device advertised
+        ``HEIGHTFIELD``; otherwise expands it to a base ``XY`` frame that draws
+        identically on a v1 device. Returns the bytes transmitted.
+        """
+        if self.supports(Capability.HEIGHTFIELD):
+            command = ext.encode_heightfield(
+                cols,
+                rows,
+                x0,
+                x_step,
+                y0,
+                y_step,
+                y_scale,
+                displacement,
+                brightness,
+                intensity=intensity,
+                serpentine=serpentine,
+            )
+            data = ext.wrap_ext_frame(command, monochrome=self._frame.monochrome)
+        else:
+            segments = ext.expand_heightfield(
+                cols,
+                rows,
+                x0,
+                x_step,
+                y0,
+                y_step,
+                y_scale,
+                displacement,
+                brightness,
+                intensity=intensity,
+                serpentine=serpentine,
+            )
+            data = ext.segments_to_base_frame(segments, monochrome=self._frame.monochrome)
+        return self._transmit(data)
+
+    def send_polyline(
+        self,
+        x0: int,
+        y0: int,
+        deltas: list[tuple[int, int]],
+        brightness: int,
+        *,
+        intensity: list[int] | None = None,
+        closed: bool = False,
+        wide: bool = False,
+    ) -> bytes:
+        """Transmit a stroke as a ``POLYLINE`` frame (device coords).
+
+        Sends the compact ``EXT`` command when the device advertised
+        ``POLYLINE``; otherwise expands it to a base ``XY`` frame.
+        """
+        if self.supports(Capability.POLYLINE):
+            command = ext.encode_polyline(
+                x0, y0, deltas, brightness, intensity=intensity, closed=closed, wide=wide
+            )
+            data = ext.wrap_ext_frame(command, monochrome=self._frame.monochrome)
+        else:
+            segments = ext.expand_polyline(
+                x0, y0, deltas, brightness, intensity=intensity, closed=closed, wide=wide
+            )
+            data = ext.segments_to_base_frame(segments, monochrome=self._frame.monochrome)
+        return self._transmit(data)
 
     @contextlib.contextmanager
     def frame(self) -> Iterator[VectorTerminal]:
