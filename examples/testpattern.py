@@ -75,7 +75,10 @@ def draw_pattern(vt: VectorTerminal, intensity: int, vectors: int) -> None:
     if extra >= 3:
         r = min(X, Y) * 0.7
         pts = [
-            (r * math.cos(2 * math.pi * i / extra), r * math.sin(2 * math.pi * i / extra))
+            (
+                r * math.cos(2 * math.pi * i / extra),
+                r * math.sin(2 * math.pi * i / extra),
+            )
             for i in range(extra + 1)
         ]
         vt.polyline(pts)
@@ -87,13 +90,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
-    p.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="line rate (match the receiver)")
-    p.add_argument("--intensity", type=int, default=4, help="beam brightness 0-15 (keep it low)")
-    p.add_argument("--vectors", type=int, default=12, help="approx. number of vectors (link stress knob)")
+    p.add_argument(
+        "--baud",
+        type=int,
+        default=DEFAULT_BAUDRATE,
+        help="line rate (match the receiver)",
+    )
+    p.add_argument(
+        "--intensity", type=int, default=4, help="beam brightness 0-15 (keep it low)"
+    )
+    p.add_argument(
+        "--vectors",
+        type=int,
+        default=12,
+        help="approx. number of vectors (link stress knob)",
+    )
     p.add_argument("--fps", type=float, default=30.0, help="frames per second")
     p.add_argument("--frames", type=int, default=0, help="frames to send (0 = forever)")
-    p.add_argument("--dry-run", action="store_true", help="don't open a port; print frame bytes")
-    p.add_argument("--preview", metavar="OUT.png", help="render the pattern to a PNG and exit")
+    p.add_argument(
+        "--dry-run", action="store_true", help="don't open a port; print frame bytes"
+    )
+    p.add_argument(
+        "--preview", metavar="OUT.png", help="render the pattern to a PNG and exit"
+    )
     p.add_argument(
         "--no-flow-control",
         action="store_true",
