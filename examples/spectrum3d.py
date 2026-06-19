@@ -129,7 +129,19 @@ class SyntheticSource:
 
 
 class AlsaSource:
-    """Capture mono audio from an ALSA device via `pyalsaaudio` (Linux only)."""
+    """Capture mono audio from an ALSA device via `pyalsaaudio` (Linux only).
+
+    Always returns the **latest** ``frame_size`` samples and throws the backlog
+    away. A spectrum display only ever wants "now": the draw loop (FFT + the
+    serial flow-control handshake + the Vectrex redraw) runs slower than audio
+    arrives — perhaps ~20 fps against ~47 audio periods/sec — so a blocking,
+    one-period-at-a-time read would let the capture buffer grow without bound and
+    the display would fall further and further behind real time. The classic
+    symptom is exactly that lag: barely a flicker while music plays, then a
+    burst of "crazy" stale audio the moment it stops and the buffer drains. So we
+    read non-blocking, drain every queued period each call, and keep only the
+    newest frame — the display stays live no matter how slow the draw loop is.
+    """
 
     def __init__(self, device: str, sample_rate: int, frame_size: int, channels: int = 1) -> None:
         try:
@@ -142,10 +154,11 @@ class AlsaSource:
 
         self.n = frame_size
         self.channels = channels
+        self._alsa = alsaaudio
         self._buf = np.zeros(0, dtype=np.float32)
         self._pcm = alsaaudio.PCM(
             type=alsaaudio.PCM_CAPTURE,
-            mode=alsaaudio.PCM_NORMAL,
+            mode=alsaaudio.PCM_NONBLOCK,
             device=device,
             channels=channels,
             rate=sample_rate,
@@ -153,16 +166,34 @@ class AlsaSource:
             periodsize=frame_size,
         )
 
-    def read_frame(self) -> np.ndarray:
-        while len(self._buf) < self.n:
-            length, data = self._pcm.read()
+    def _drain(self) -> None:
+        """Pull every period currently queued into ``self._buf`` (non-blocking)."""
+        while True:
+            try:
+                length, data = self._pcm.read()
+            except self._alsa.ALSAAudioError:
+                break  # overrun/xrun: the PCM recovers on the next call
             if length <= 0 or not data:
-                continue
+                break  # nothing more available right now
             arr = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
             if self.channels > 1:
                 arr = arr.reshape(-1, self.channels).mean(axis=1)
             self._buf = np.concatenate([self._buf, arr])
-        frame, self._buf = self._buf[: self.n], self._buf[self.n :]
+
+    def read_frame(self) -> np.ndarray:
+        import time
+
+        # Drain the whole backlog. Only spin (briefly) if nothing is buffered yet
+        # — startup, or the rare case the draw loop outruns the audio.
+        for _ in range(200):
+            self._drain()
+            if len(self._buf) >= self.n:
+                break
+            time.sleep(0.001)
+        if len(self._buf) < self.n:  # never filled (shouldn't happen): pad
+            return np.zeros(self.n, dtype=np.float32)
+        frame = self._buf[-self.n :].copy()  # the newest frame; drop the rest
+        self._buf = np.zeros(0, dtype=np.float32)
         return frame
 
 
@@ -184,6 +215,7 @@ class Analyzer:
         n_bins: int = DEFAULT_BINS,
         f_min: float = 40.0,
         f_max: float = DEFAULT_FMAX,
+        tilt_db_per_oct: float = 3.0,
     ) -> None:
         self.window = np.hanning(frame_size).astype(np.float32)
         freqs = np.fft.rfftfreq(frame_size, 1.0 / sample_rate)
@@ -191,6 +223,16 @@ class Analyzer:
         self._bins = [
             np.where((freqs >= edges[i]) & (freqs < edges[i + 1]))[0] for i in range(n_bins)
         ]
+        # Spectral tilt ("pink-noise" pre-emphasis). Music and most real signals
+        # fall ~3 dB/octave toward higher frequencies, so the low end carries far
+        # more energy and dominates any global normalisation — the bass bins peg
+        # full-height and everything above them reads as flat. Pre-emphasising by
+        # +tilt_db_per_oct dB/octave flattens that natural slope so every band
+        # gets a fair share of the display. Centres are the geometric mean of
+        # each bin's edges; weight ∝ (f / f0) ** (tilt_db / 6.02 per octave).
+        centers = np.sqrt(edges[:-1] * edges[1:])
+        octaves = np.log2(centers / centers[0])
+        self._tilt = (10.0 ** (tilt_db_per_oct * octaves / 20.0)).astype(np.float32)
         self.n_bins = n_bins
         self._level = np.zeros(n_bins, dtype=np.float32)
         self._peak = 1e-6
@@ -201,9 +243,14 @@ class Analyzer:
             [float(spectrum[idx].mean()) if idx.size else 0.0 for idx in self._bins],
             dtype=np.float32,
         )
+        mags = mags * self._tilt  # flatten the bass-heavy spectral slope
         mags = np.log10(1.0 + mags)
         # Decaying auto-gain so quiet and loud passages both fill the display.
-        self._peak = max(self._peak * 0.995, float(mags.max()), 1e-6)
+        # Normalise to a high *percentile*, not the single loudest bin: one
+        # dominant peak (still, usually, the low end) then can't set the gain for
+        # the whole display and crush every other band to zero.
+        loud = float(np.percentile(mags, 90)) if self.n_bins >= 4 else float(mags.max())
+        self._peak = max(self._peak * 0.995, loud, 1e-6)
         norm = np.clip(mags / self._peak, 0.0, 1.0)
         # Fast attack, slow release.
         rising = norm > self._level
@@ -468,12 +515,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     src.add_argument("--synthetic", action="store_true", help="use the built-in signal generator")
     src.add_argument("--rate", type=int, default=DEFAULT_SAMPLE_RATE, help="sample rate (Hz)")
     src.add_argument("--frame-size", type=int, default=DEFAULT_FRAME_SIZE, help="samples per FFT")
+    src.add_argument("--fmin", type=float, default=40.0, help="bottom of frequency axis (Hz)")
     src.add_argument("--fmax", type=float, default=DEFAULT_FMAX, help="top of frequency axis (Hz)")
+    src.add_argument(
+        "--tilt",
+        type=float,
+        default=3.0,
+        help="spectral pre-emphasis (dB/octave) to tame bass dominance; "
+        "0 = none, higher lifts the high end relative to the low",
+    )
 
     disp = parser.add_argument_group("display")
     disp.add_argument("--bins", type=int, default=DEFAULT_BINS, help="frequency bins (X axis)")
     disp.add_argument("--history", type=int, default=DEFAULT_HISTORY, help="waterfall depth (rows)")
     disp.add_argument("--fps", type=float, default=25.0, help="target frames per second")
+    disp.add_argument(
+        "--scale",
+        type=float,
+        default=1.2,
+        help="zoom the rendered image (1.0 = baseline). ~1.25 is the safe max "
+        "with camera rotation; go to ~1.35 with --no-rotate. Larger clips the "
+        "corners on loud, full-width frames at swing extremes",
+    )
     disp.add_argument(
         "--no-rotate",
         action="store_true",
@@ -514,9 +577,16 @@ def make_source(args: argparse.Namespace) -> SyntheticSource | AlsaSource:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     source = make_source(args)
-    analyzer = Analyzer(args.rate, args.frame_size, n_bins=args.bins, f_max=args.fmax)
+    analyzer = Analyzer(
+        args.rate,
+        args.frame_size,
+        n_bins=args.bins,
+        f_min=args.fmin,
+        f_max=args.fmax,
+        tilt_db_per_oct=args.tilt,
+    )
     waterfall = Waterfall3D(n_bins=args.bins, history=args.history)
-    camera = Camera()
+    camera = Camera(size=CAM_SIZE * args.scale)
     detector = ChangeDetector(sensitivity=args.sensitivity)
     rotate = not args.no_rotate
 
