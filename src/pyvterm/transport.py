@@ -12,12 +12,22 @@ import abc
 import time
 from typing import Any, Callable
 
-__all__ = ["Transport", "MemoryTransport", "SerialTransport", "DEFAULT_BAUDRATE", "DEFAULT_PORT"]
+__all__ = [
+    "Transport",
+    "MemoryTransport",
+    "SerialTransport",
+    "DEFAULT_BAUDRATE",
+    "DEFAULT_PORT",
+    "DEFAULT_SYNC_BYTE",
+]
 
 #: USB-CDC devices ignore the line rate, but the reference driver requests 2 Mbaud.
 DEFAULT_BAUDRATE = 2_000_000
 #: Default device path created by the USB-DVG / pitrex CDC gadget on Linux.
 DEFAULT_PORT = "/dev/ttyACM0"
+#: Byte a flow-controlled receiver (e.g. vekterm on a raw UART) sends to say
+#: "ready for the next frame". USB-CDC devices don't need this; raw-UART ones do.
+DEFAULT_SYNC_BYTE = 0x06  # ASCII ACK
 
 
 class Transport(abc.ABC):
@@ -102,6 +112,8 @@ class SerialTransport(Transport):
         write_timeout: float | None = None,
         settle: float = 2.0,
         chunk_size: int = 1024,
+        flow_control: int | None = None,
+        sync_timeout: float = 1.0,
         serial_factory: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -118,6 +130,14 @@ class SerialTransport(Transport):
         self.port = port
         self.baudrate = baudrate
         self.chunk_size = max(1, chunk_size)
+        #: When set (a byte value), wait for the receiver to send it before each
+        #: frame — flow control for a raw-UART receiver with no buffering. ``None``
+        #: keeps the USB-CDC behaviour of streaming without waiting.
+        self.flow_control = None if flow_control is None else (flow_control & 0xFF)
+        self.sync_timeout = sync_timeout
+        #: Diagnostics: frames actually transmitted vs skipped (no ready byte).
+        self.frames_sent = 0
+        self.frames_skipped = 0
         # 8N1, no flow control — matches the reference termios/DCB setup.
         self._serial = serial_factory(
             port=port,
@@ -140,12 +160,35 @@ class SerialTransport(Transport):
             if callable(fn):
                 fn()
 
+    def _wait_ready(self) -> bool:
+        """Block until the receiver sends the flow-control sync byte.
+
+        Returns ``True`` once seen, or ``False`` on timeout (the caller skips the
+        frame rather than risk overrunning the receiver). No-op (always ``True``)
+        when flow control is off.
+        """
+        if self.flow_control is None:
+            return True
+        deadline = time.monotonic() + self.sync_timeout
+        while time.monotonic() < deadline:
+            waiting = getattr(self._serial, "in_waiting", 0) or 1
+            chunk = self._serial.read(waiting)
+            if chunk and self.flow_control in chunk:
+                return True
+        return False
+
     def write(self, data: bytes) -> int:
+        # With flow control, send a frame only after the receiver says it's ready;
+        # if it never does, skip this frame (lossless beats overrunning the FIFO).
+        if self.flow_control is not None and not self._wait_ready():
+            self.frames_skipped += 1
+            return 0
         view = memoryview(data)
         total = 0
         for offset in range(0, len(view), self.chunk_size):
             written = self._serial.write(view[offset : offset + self.chunk_size])
             total += int(written or 0)
+        self.frames_sent += 1
         return total
 
     def read(self, size: int = 1) -> bytes:

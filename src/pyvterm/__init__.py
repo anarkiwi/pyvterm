@@ -34,6 +34,7 @@ from .terminal import VectorTerminal
 from .transport import (
     DEFAULT_BAUDRATE,
     DEFAULT_PORT,
+    DEFAULT_SYNC_BYTE,
     MemoryTransport,
     SerialTransport,
     Transport,
@@ -52,6 +53,7 @@ __all__ = [
     "MemoryTransport",
     "DEFAULT_PORT",
     "DEFAULT_BAUDRATE",
+    "DEFAULT_SYNC_BYTE",
     # protocol + geometry
     "protocol",
     "geometry",
