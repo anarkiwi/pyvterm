@@ -110,8 +110,7 @@ def test_fallback_frame_is_valid_base_protocol():
     segs = ext.expand_heightfield(**HF_KW)
     data = ext.segments_to_base_frame(segs)
     decoded = [
-        protocol.decode_word(int.from_bytes(data[i : i + 4], "big"))
-        for i in range(0, len(data), 4)
+        protocol.decode_word(int.from_bytes(data[i : i + 4], "big")) for i in range(0, len(data), 4)
     ]
     assert decoded[0]["flag"] is Flag.FRAME
     assert decoded[-1]["flag"] is Flag.COMPLETE

@@ -196,14 +196,35 @@ class VectorTerminal:
         ``HEIGHTFIELD``; otherwise expands it to a base ``XY`` frame that draws
         identically on a v1 device. Returns the bytes transmitted.
         """
-        args = (cols, rows, x0, x_step, y0, y_step, y_scale, displacement, brightness)
-        kwargs = {"intensity": intensity, "serpentine": serpentine}
         if self.supports(Capability.HEIGHTFIELD):
-            data = ext.wrap_ext_frame(
-                ext.encode_heightfield(*args, **kwargs), monochrome=self._frame.monochrome
+            command = ext.encode_heightfield(
+                cols,
+                rows,
+                x0,
+                x_step,
+                y0,
+                y_step,
+                y_scale,
+                displacement,
+                brightness,
+                intensity=intensity,
+                serpentine=serpentine,
             )
+            data = ext.wrap_ext_frame(command, monochrome=self._frame.monochrome)
         else:
-            segments = ext.expand_heightfield(*args, **kwargs)
+            segments = ext.expand_heightfield(
+                cols,
+                rows,
+                x0,
+                x_step,
+                y0,
+                y_step,
+                y_scale,
+                displacement,
+                brightness,
+                intensity=intensity,
+                serpentine=serpentine,
+            )
             data = ext.segments_to_base_frame(segments, monochrome=self._frame.monochrome)
         return self._transmit(data)
 
@@ -223,14 +244,15 @@ class VectorTerminal:
         Sends the compact ``EXT`` command when the device advertised
         ``POLYLINE``; otherwise expands it to a base ``XY`` frame.
         """
-        kwargs = {"intensity": intensity, "closed": closed, "wide": wide}
         if self.supports(Capability.POLYLINE):
-            data = ext.wrap_ext_frame(
-                ext.encode_polyline(x0, y0, deltas, brightness, **kwargs),
-                monochrome=self._frame.monochrome,
+            command = ext.encode_polyline(
+                x0, y0, deltas, brightness, intensity=intensity, closed=closed, wide=wide
             )
+            data = ext.wrap_ext_frame(command, monochrome=self._frame.monochrome)
         else:
-            segments = ext.expand_polyline(x0, y0, deltas, brightness, **kwargs)
+            segments = ext.expand_polyline(
+                x0, y0, deltas, brightness, intensity=intensity, closed=closed, wide=wide
+            )
             data = ext.segments_to_base_frame(segments, monochrome=self._frame.monochrome)
         return self._transmit(data)
 
