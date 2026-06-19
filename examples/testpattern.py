@@ -96,9 +96,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_BAUDRATE,
         help="line rate (match the receiver)",
     )
-    p.add_argument(
-        "--intensity", type=int, default=4, help="beam brightness 0-15 (keep it low)"
-    )
+    p.add_argument("--intensity", type=int, default=4, help="beam brightness 0-15 (keep it low)")
     p.add_argument(
         "--vectors",
         type=int,
@@ -107,12 +105,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--fps", type=float, default=30.0, help="frames per second")
     p.add_argument("--frames", type=int, default=0, help="frames to send (0 = forever)")
-    p.add_argument(
-        "--dry-run", action="store_true", help="don't open a port; print frame bytes"
-    )
-    p.add_argument(
-        "--preview", metavar="OUT.png", help="render the pattern to a PNG and exit"
-    )
+    p.add_argument("--dry-run", action="store_true", help="don't open a port; print frame bytes")
+    p.add_argument("--preview", metavar="OUT.png", help="render the pattern to a PNG and exit")
     p.add_argument(
         "--no-flow-control",
         action="store_true",
