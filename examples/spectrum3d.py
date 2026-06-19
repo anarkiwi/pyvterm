@@ -54,6 +54,7 @@ from pyvterm import (
     DEFAULT_BAUDRATE,
     DEFAULT_BOUNDS,
     DEFAULT_PORT,
+    DEFAULT_SYNC_BYTE,
     Bounds,
     MemoryTransport,
     VectorTerminal,
@@ -488,6 +489,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
     out.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
+    out.add_argument(
+        "--no-flow-control",
+        action="store_true",
+        help="disable the per-frame handshake and just stream (for a buffered "
+        "USB-CDC device; on by default for a raw-UART receiver like vekterm)",
+    )
     out.add_argument("--dry-run", action="store_true", help="don't open a serial port")
     out.add_argument("--frames", type=int, default=0, help="frames to run (0 = forever)")
     out.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
@@ -534,7 +541,8 @@ def main(argv: list[str] | None = None) -> int:
         print("[dry run] no serial port opened")
     else:
         print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
-        terminal = VectorTerminal(port=args.port, baudrate=args.baud)
+        flow = None if args.no_flow_control else DEFAULT_SYNC_BYTE
+        terminal = VectorTerminal(port=args.port, baudrate=args.baud, flow_control=flow)
 
     import time
 

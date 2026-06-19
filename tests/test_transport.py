@@ -63,6 +63,9 @@ def _make(**kw: Any) -> tuple[SerialTransport, FakeSerial]:
         captured["fake"] = fake
         return fake
 
+    # These tests exercise raw writes; flow control is on by default but is
+    # covered by its own tests, so default it off here unless asked for.
+    kw.setdefault("flow_control", None)
     transport = SerialTransport("/dev/ttyTEST", settle=0, serial_factory=factory, **kw)
     return transport, captured["fake"]
 
@@ -81,6 +84,22 @@ def test_serial_transport_opens_8n1_no_flow_control():
     assert fake.reset_in == 1
     assert fake.reset_out == 1
     assert transport.port == "/dev/ttyTEST"
+
+
+def test_serial_transport_flow_control_sends_after_ready():
+    transport, fake = _make(flow_control=0x06, sync_timeout=0.5)
+    fake.read = lambda n=1: b"\x06"  # receiver says "ready"  # type: ignore[assignment]
+    assert transport.write(b"\x01\x02\x03\x04") == 4
+    assert transport.frames_sent == 1
+    assert transport.flow_control == 0x06  # stays on once the byte is seen
+
+
+def test_serial_transport_flow_control_auto_disables_without_ready():
+    # FakeSerial.read returns zero bytes (never the 0x06): on timeout the handshake
+    # is assumed absent (USB-CDC), so flow control disables and the frame streams.
+    transport, _ = _make(flow_control=0x06, sync_timeout=0.02)
+    assert transport.write(b"\x01\x02\x03\x04") == 4
+    assert transport.flow_control is None
 
 
 def test_serial_transport_chunks_large_writes():

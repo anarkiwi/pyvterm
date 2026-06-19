@@ -112,7 +112,7 @@ class SerialTransport(Transport):
         write_timeout: float | None = None,
         settle: float = 2.0,
         chunk_size: int = 1024,
-        flow_control: int | None = None,
+        flow_control: int | None = DEFAULT_SYNC_BYTE,
         sync_timeout: float = 1.0,
         serial_factory: Callable[..., Any] | None = None,
         **kwargs: Any,
@@ -131,10 +131,14 @@ class SerialTransport(Transport):
         self.baudrate = baudrate
         self.chunk_size = max(1, chunk_size)
         #: When set (a byte value), wait for the receiver to send it before each
-        #: frame — flow control for a raw-UART receiver with no buffering. ``None``
-        #: keeps the USB-CDC behaviour of streaming without waiting.
+        #: frame — flow control for a raw-UART receiver with no buffering (e.g.
+        #: vekterm). On by default; if the receiver never sends the byte (a
+        #: USB-CDC device that doesn't speak the handshake), it auto-disables
+        #: after the first timeout and streams. Pass ``flow_control=None`` to
+        #: force plain streaming from the start.
         self.flow_control = None if flow_control is None else (flow_control & 0xFF)
         self.sync_timeout = sync_timeout
+        self._flow_seen = False  # have we ever received the ready byte?
         #: Diagnostics: frames actually transmitted vs skipped (no ready byte).
         self.frames_sent = 0
         self.frames_skipped = 0
@@ -163,9 +167,11 @@ class SerialTransport(Transport):
     def _wait_ready(self) -> bool:
         """Block until the receiver sends the flow-control sync byte.
 
-        Returns ``True`` once seen, or ``False`` on timeout (the caller skips the
-        frame rather than risk overrunning the receiver). No-op (always ``True``)
-        when flow control is off.
+        Returns ``True`` once seen. On timeout: if we've *never* seen the byte the
+        receiver doesn't speak the handshake (e.g. a USB-CDC device), so flow
+        control auto-disables and we stream from now on; otherwise the handshake
+        is in use and we return ``False`` so the caller skips the frame rather
+        than overrun the receiver.
         """
         if self.flow_control is None:
             return True
@@ -174,7 +180,11 @@ class SerialTransport(Transport):
             waiting = getattr(self._serial, "in_waiting", 0) or 1
             chunk = self._serial.read(waiting)
             if chunk and self.flow_control in chunk:
+                self._flow_seen = True
                 return True
+        if not self._flow_seen:
+            self.flow_control = None  # no handshake here — stream (USB-CDC)
+            return True
         return False
 
     def write(self, data: bytes) -> int:

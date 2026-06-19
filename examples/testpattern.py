@@ -95,10 +95,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="don't open a port; print frame bytes")
     p.add_argument("--preview", metavar="OUT.png", help="render the pattern to a PNG and exit")
     p.add_argument(
-        "--flow-control",
+        "--no-flow-control",
         action="store_true",
-        help="wait for the receiver's ready byte before each frame "
-        "(required for a raw-UART receiver like vekterm)",
+        help="disable the per-frame handshake and just stream (for a buffered "
+        "USB-CDC device; on by default for a raw-UART receiver like vekterm)",
     )
     return p.parse_args(argv)
 
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"Opening {args.port} at {args.baud} baud...")
-    flow = DEFAULT_SYNC_BYTE if args.flow_control else None
+    flow = None if args.no_flow_control else DEFAULT_SYNC_BYTE
     vt = VectorTerminal(port=args.port, baudrate=args.baud, flow_control=flow)
     period = 1.0 / args.fps if args.fps > 0 else 0.0
     count = 0
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                 draw_pattern(vt, args.intensity, args.vectors)
             count += 1
             now = time.monotonic()
-            if args.flow_control and now - last_report >= 1.0:
+            if not args.no_flow_control and now - last_report >= 1.0:
                 # If 'sent' climbs, the receiver's ready/handshake is working;
                 # all-skipped means we never see its sync byte (link/TX issue).
                 t = vt.transport
