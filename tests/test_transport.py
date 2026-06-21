@@ -1,5 +1,7 @@
 """Tests for the byte transports (no real hardware required)."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from pyvterm.transport import DEFAULT_BAUDRATE, MemoryTransport, SerialTransport
