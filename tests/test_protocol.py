@@ -61,6 +61,14 @@ def test_bounds_conversion_endpoints():
     assert b.conv_y(0) == 2050
 
 
+def test_keepalive_word():
+    # CMD flag (5 << 29) | 'K' (0x4B).
+    assert protocol.encode_keepalive_word() == 0xA000004B
+    assert protocol.keepalive() == protocol.pack_word(0xA000004B)
+    # Distinct from the HELLO probe so a receiver can tell them apart.
+    assert protocol.encode_keepalive_word() != protocol.encode_hello_word()
+
+
 def test_byte_wrappers_match_word_encoders():
     assert protocol.rgb(0xF0, 0xF0, 0xF0) == protocol.pack_word(0x20F0F0F0)
     assert protocol.rgb_scaled(15, 15, 15) == protocol.pack_word(0x20F0F0F0)

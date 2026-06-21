@@ -60,6 +60,9 @@ __all__ = [
     "EXT_SUBTYPE_SHIFT",
     "EXT_LENGTH_MASK",
     "CMD_HELLO",
+    "CMD_KEEPALIVE",
+    "encode_keepalive_word",
+    "keepalive",
     "HELLO_MAGIC",
     "HELLO_LENGTH",
     "PROTOCOL_VERSION",
@@ -130,6 +133,10 @@ class Capability(IntEnum):
 #: Subcommand byte of the ``CMD`` capability probe (``'V'``), distinct from
 #: AdvanceMAME's ``GET_DVG_INFO = 1``.
 CMD_HELLO = 0x56
+#: Subcommand byte of the ``CMD`` keepalive / null ping (``'K'``). A sender writes
+#: it to keep an idle receiver from timing out to its splash without re-sending a
+#: whole frame (see ``docs/PROTOCOL-EXTENSIONS.md`` §11).
+CMD_KEEPALIVE = 0x4B
 #: First two bytes of the HELLO reply, identifying a vekterm device.
 HELLO_MAGIC = b"VK"
 #: Total length of the fixed binary HELLO descriptor.
@@ -272,6 +279,16 @@ def encode_hello_word() -> int:
 def hello_word() -> bytes:
     """4 bytes for the capability probe (``encode_hello_word`` packed)."""
     return pack_word(encode_hello_word())
+
+
+def encode_keepalive_word() -> int:
+    """Encode the ``CMD`` keepalive / null ping word."""
+    return (Flag.CMD << FLAG_SHIFT) | CMD_KEEPALIVE
+
+
+def keepalive() -> bytes:
+    """4 bytes for the keepalive ping (``encode_keepalive_word`` packed)."""
+    return pack_word(encode_keepalive_word())
 
 
 @dataclass(frozen=True)

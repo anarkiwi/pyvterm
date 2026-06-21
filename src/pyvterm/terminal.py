@@ -25,7 +25,7 @@ from typing import Any
 from . import ext, protocol
 from .frame import FrameBuilder
 from .protocol import DEFAULT_BOUNDS, DVG_RENDER_QUALITY, Bounds, Capability, HelloDescriptor
-from .transport import DEFAULT_BAUDRATE, DEFAULT_PORT, SerialTransport, Transport
+from .transport import DEFAULT_BAUDRATE, DEFAULT_PORT, FrameTiming, SerialTransport, Transport
 
 __all__ = ["VectorTerminal"]
 
@@ -152,6 +152,32 @@ class VectorTerminal:
     def supports(self, capability: Capability) -> bool:
         """True if the negotiated device advertised ``capability``."""
         return self.capabilities is not None and self.capabilities.supports(capability)
+
+    # -- timing / keepalive ------------------------------------------------
+
+    @property
+    def last_timing(self) -> FrameTiming | None:
+        """The receiver's most recent frame-draw timing, or ``None``.
+
+        Populated from the device's sync reply (vekterm v2). Use
+        :attr:`FrameTiming.draw_us` to throttle the send rate to scene
+        complexity, e.g. ``time.sleep(max(0, target_dt - draw_us / 1e6))``.
+        """
+        return getattr(self.transport, "last_timing", None)
+
+    def send_keepalive(self) -> bytes:
+        """Send a keepalive ping so an idle receiver holds the current frame.
+
+        A frame-suppressing sender (see :attr:`suppress_duplicates`) goes silent
+        when the scene is static; without traffic a v2 receiver eventually times
+        out to its splash. A periodic keepalive proves the link is live without
+        re-sending the whole frame. Honours flow control like a frame. Returns
+        the bytes written.
+        """
+        data = protocol.keepalive()
+        self.transport.write(data)
+        self.transport.flush()
+        return data
 
     # -- transmission ------------------------------------------------------
 
