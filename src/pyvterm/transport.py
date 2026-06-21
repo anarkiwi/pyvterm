@@ -87,6 +87,9 @@ class Transport(abc.ABC):
     #: device doesn't report timing (a v1 receiver, a USB-CDC device, or none).
     #: Populated by transports that read a sync reply (:class:`SerialTransport`).
     last_timing: FrameTiming | None = None
+    #: Running total of payload bytes written (frames + keepalives), for the
+    #: ``--debug`` I/O-rate readout. Probe/handshake bytes are not counted.
+    bytes_sent: int = 0
 
     @abc.abstractmethod
     def write(self, data: bytes) -> int:
@@ -124,10 +127,12 @@ class MemoryTransport(Transport):
         self.frames: list[bytes] = []
         self.closed = False
         self.flushed = 0
+        self.bytes_sent = 0
 
     def write(self, data: bytes) -> int:
         self.buffer += data
         self.frames.append(bytes(data))
+        self.bytes_sent += len(data)
         return len(data)
 
     def flush(self) -> None:
@@ -174,7 +179,7 @@ class SerialTransport(Transport):
         flow_control: int | None = DEFAULT_SYNC_BYTE,
         sync_timeout: float = 1.0,
         baud_candidates: tuple[int, ...] = DEFAULT_BAUD_CANDIDATES,
-        detect_timeout: float = 0.3,
+        detect_timeout: float = 0.1,
         serial_factory: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -217,6 +222,8 @@ class SerialTransport(Transport):
         #: Diagnostics: frames actually transmitted vs skipped (no ready byte).
         self.frames_sent = 0
         self.frames_skipped = 0
+        #: Running total of payload bytes written, for the ``--debug`` I/O rate.
+        self.bytes_sent = 0
         # 8N1, no flow control — matches the reference termios/DCB setup.
         self._serial = serial_factory(
             port=port,
@@ -259,28 +266,64 @@ class SerialTransport(Transport):
     ) -> int | None:
         """Find the receiver's line rate by probing each candidate baud.
 
-        Only the matching rate frames the ``HELLO`` reply correctly, so the first
-        candidate whose probe returns a descriptor is the device's baud; the port
-        is left tuned to it (and v2 is negotiated as a side effect). Returns the
-        detected baud, or ``None`` if nothing answered — in which case the port is
-        left at :data:`DEFAULT_BAUDRATE` so a USB-CDC device (which ignores the
-        line rate) still streams. Uses a short ``per_timeout`` per candidate so a
-        non-responding link doesn't stall for long.
+        Only the matching rate frames the receiver's bytes correctly, so the
+        first candidate that answers (see :meth:`_probe_alive`) is the device's
+        baud; the port is left tuned to it (and v2 negotiated as a side effect).
+        Returns the detected baud, or ``None`` if nothing answered — in which case
+        the port is left at :data:`DEFAULT_BAUDRATE` so a USB-CDC device (which
+        ignores the line rate) still streams. ``per_timeout`` bounds the wait for
+        the first reply byte per candidate, so a wrong/disconnected rate is
+        abandoned quickly.
         """
         candidates = candidates or self.baud_candidates
         per_timeout = self.detect_timeout if per_timeout is None else per_timeout
-        saved = self.sync_timeout
-        self.sync_timeout = per_timeout
-        try:
-            for baud in candidates:
-                self._apply_baud(baud)
-                if self.probe_capabilities() is not None:
-                    return baud
-        finally:
-            self.sync_timeout = saved
+        for baud in candidates:
+            self._apply_baud(baud)
+            if self._probe_alive(per_timeout):
+                return baud
         # Nothing answered: settle on a sane default for a baud-agnostic link.
         self._apply_baud(DEFAULT_BAUDRATE)
         return None
+
+    def _probe_alive(self, per_timeout: float) -> bool:
+        """Probe the current baud once; ``True`` if a receiver answered at it.
+
+        Writes the ``HELLO`` probe and short-circuits on the first reply byte: a
+        live receiver streams the flow-control sync byte, so seeing it (or a
+        decoded ``HELLO`` descriptor) commits to this rate without waiting out
+        the timeout. At a wrong baud the line yields no recognised reply within
+        ``per_timeout`` and the candidate is skipped. The ``HELLO`` descriptor,
+        when it arrives, is decoded for v2 capabilities.
+        """
+        self._serial.write(protocol.hello_word())
+        deadline = time.monotonic() + per_timeout
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            chunk = self._serial.read(getattr(self._serial, "in_waiting", 0) or 1)
+            if not chunk:
+                continue
+            buf += chunk
+            sync = self.flow_control is not None and self.flow_control in buf
+            descriptor = protocol.decode_hello_descriptor(bytes(buf))
+            if descriptor is None and sync:
+                # First sync byte: a live receiver — give the descriptor a brief
+                # grace to arrive (for v2 caps), then commit to this baud.
+                grace = time.monotonic() + per_timeout
+                while descriptor is None and time.monotonic() < grace:
+                    more = self._serial.read(getattr(self._serial, "in_waiting", 0) or 1)
+                    if more:
+                        buf += more
+                        descriptor = protocol.decode_hello_descriptor(bytes(buf))
+            if sync:
+                self._flow_seen = True
+            if descriptor is not None:
+                self._v2 = True
+                self._sync_buf.clear()
+                self._reset_buffers()
+                return True
+            if sync:
+                return True  # live receiver at this rate, descriptor or not
+        return False
 
     def probe_capabilities(self) -> protocol.HelloDescriptor | None:
         """Write the ``HELLO`` probe and read the device's capability descriptor.
@@ -387,6 +430,7 @@ class SerialTransport(Transport):
             written = self._serial.write(view[offset : offset + self.chunk_size])
             total += int(written or 0)
         self.frames_sent += 1
+        self.bytes_sent += total
         return total
 
     def read(self, size: int = 1) -> bytes:

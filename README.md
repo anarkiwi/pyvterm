@@ -272,6 +272,11 @@ path unless you specifically need the UART pins.
 - `SerialTransport` waits ~2 s after opening before flushing buffers (the
   reference driver does the same "to make flush work, for some reason"); pass
   `settle=0` to skip it.
+- The library is silent by default — it prints nothing. The examples are too:
+  pass `--debug` (or `--debug N` for an N-second period) to print one telemetry
+  line per period with the outbound I/O rate and the min/mean/max vector count
+  and draw time the device reports in its v2 sync record. `pyvterm.DebugReporter`
+  exposes the same readout for your own loops.
 
 ## Development
 

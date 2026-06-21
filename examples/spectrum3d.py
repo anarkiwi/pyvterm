@@ -57,6 +57,7 @@ from pyvterm import (
     Bounds,
     MemoryTransport,
     VectorTerminal,
+    debug,
 )
 
 # --- defaults -------------------------------------------------------------
@@ -570,6 +571,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
     out.add_argument("--width", type=int, default=480, help="preview width (px)")
     out.add_argument("--height", type=int, default=360, help="preview height (px)")
+    debug.add_debug_argument(out)
     return parser.parse_args(argv)
 
 
@@ -619,10 +621,12 @@ def main(argv: list[str] | None = None) -> int:
         terminal = VectorTerminal(transport=MemoryTransport())
         print("[dry run] no serial port opened")
     else:
-        print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
+        if args.debug:
+            print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
         flow = None if args.no_flow_control else DEFAULT_SYNC_BYTE
         terminal = VectorTerminal(port=args.port, baudrate=args.baud, flow_control=flow)
 
+    reporter = debug.reporter_for(terminal, args.debug)
     drawn = 0
     try:
         while args.frames == 0 or drawn < args.frames:
@@ -637,6 +641,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"yaw={math.degrees(camera.yaw):+5.0f}deg{tag}"
                 )
             drawn += 1
+            if reporter:
+                reporter.tick()
             terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")

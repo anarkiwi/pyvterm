@@ -36,13 +36,13 @@ from __future__ import annotations
 
 import argparse
 import math
-import time
 
 from pyvterm import (
     DEFAULT_PORT,
     DEFAULT_SYNC_BYTE,
     MemoryTransport,
     VectorTerminal,
+    debug,
 )
 
 # The default host bounds are x[-512, 511], y[-384, 383]; stay inside them.
@@ -115,6 +115,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="disable the per-frame handshake and just stream (for a buffered "
         "USB-CDC device; on by default for a raw-UART receiver like vekterm)",
     )
+    debug.add_debug_argument(p)
     return p.parse_args(argv)
 
 
@@ -141,25 +142,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[dry run] frame is {len(data)} bytes ({len(data) // 4} words)")
         return 0
 
-    print(f"Opening {args.port} at {args.baud} baud...")
+    if args.debug:
+        print(f"Opening {args.port} at {args.baud} baud...")
     flow = None if args.no_flow_control else DEFAULT_SYNC_BYTE
     vt = VectorTerminal(port=args.port, baudrate=args.baud, flow_control=flow)
+    # --debug reports I/O rate and frames sent/skipped (a climbing 'skipped' means
+    # the receiver's ready byte never arrived — a link/TX issue).
+    reporter = debug.reporter_for(vt, args.debug)
     count = 0
-    last_report = time.monotonic()
     try:
         while args.frames == 0 or count < args.frames:
             with vt.frame():
                 draw_pattern(vt, args.intensity, args.vectors)
             count += 1
-            now = time.monotonic()
-            if not args.no_flow_control and now - last_report >= 1.0:
-                # If 'sent' climbs, the receiver's ready/handshake is working;
-                # all-skipped means we never see its sync byte (link/TX issue).
-                t = vt.transport
-                sent = getattr(t, "frames_sent", "?")
-                skipped = getattr(t, "frames_skipped", "?")
-                print(f"flow-control: sent={sent} skipped={skipped}")
-                last_report = now
+            if reporter:
+                reporter.tick()
             vt.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
