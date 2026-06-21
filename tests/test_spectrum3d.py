@@ -102,7 +102,7 @@ def test_camera_starts_settled_head_on():
 
 
 def test_camera_jump_swings_toward_new_view():
-    cam = spectrum3d.Camera()
+    cam = spectrum3d.Camera(fly=False)  # preset/sway mode
     cam.jump()  # advance to preset 1
     assert (cam.base_yaw, cam.base_pitch) == spectrum3d.VIEW_PRESETS[1]
     before = cam.yaw
@@ -111,6 +111,19 @@ def test_camera_jump_swings_toward_new_view():
     for _ in range(200):  # converges to track the swaying target near the base view
         cam.update()
     assert abs(cam.yaw - cam.base_yaw) <= cam.sway_yaw + 0.05
+
+
+def test_camera_fly_orbits_around_and_sweeps_over_and_under():
+    cam = spectrum3d.Camera(fly=True)
+    yaws, pitches = [], []
+    for _ in range(4000):
+        cam.update()
+        yaws.append(cam.yaw)
+        pitches.append(cam.pitch)
+    # Orbits all the way around (yaw sweeps more than a full turn)...
+    assert max(yaws) - min(yaws) > 2.0 * math.pi
+    # ...and the pitch goes both over (above) and under (below) the slab.
+    assert max(pitches) > 0.2 and min(pitches) < 0.0
 
 
 def test_step_drives_camera_and_records_jumps():
@@ -133,9 +146,11 @@ def test_step_no_rotate_keeps_camera_fixed():
     waterfall = spectrum3d.Waterfall3D(n_bins=16, history=8)
     camera = spectrum3d.Camera()
     detector = spectrum3d.ChangeDetector()
+    yaw0, pitch0 = camera.yaw, camera.pitch
     for _ in range(50):
         spectrum3d.step(source, analyzer, waterfall, camera, detector, rotate=False)
-    assert camera.yaw == 0.0 and camera.pitch == spectrum3d.VIEW_PRESETS[0][1]
+    # rotate=False never advances the camera, so it holds its initial view.
+    assert camera.yaw == yaw0 and camera.pitch == pitch0
 
 
 def test_main_no_rotate_runs():

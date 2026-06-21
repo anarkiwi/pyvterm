@@ -10,7 +10,10 @@ vector display renders beautifully:
   rates, tracing a wandering figure).
 * **Moves in and out**: its distance from the viewer swings toward and away,
   and perspective projection makes it loom large up close and shrink into the
-  distance.
+  distance — and its beam **brightens up close and dims as it recedes**.
+* **Flies over a rippling floor**: a perspective grid below the cube ripples
+  with a slow travelling wave and fades into the background as it recedes
+  (disable it with ``--no-floor``).
 
 The maths is plain trigonometry — eight corners rotated by three angles, then
 divided by depth for perspective — so this example needs **only the core
@@ -155,13 +158,103 @@ class SpinningCube:
         points = self.project(frame)
         return [(points[i], points[j]) for i, j in EDGES]
 
+    def brightness_at(self, frame: int) -> int:
+        """Beam intensity for ``frame``, scaled by apparent size (depth cue).
+
+        The cube swings toward and away from the camera; it should glow brighter
+        up close (large) and fade as it recedes (small). Maps the distance across
+        its in/out range onto ``[dim, intensity]``.
+        """
+        near, far = self.distance * (1.0 - self.zoom), self.distance * (1.0 + self.zoom)
+        frac = 0.0 if far <= near else (self.distance_at(frame) - near) / (far - near)
+        frac = min(1.0, max(0.0, frac))  # 0 = nearest/brightest, 1 = farthest/dimmest
+        dim = max(3, round(self.intensity * 0.3))
+        return round(self.intensity - frac * (self.intensity - dim))
+
     def draw(self, terminal: VectorTerminal, frame: int) -> int:
         """Draw the cube into the terminal's frame; returns the edge count."""
         points = self.project(frame)
-        terminal.set_intensity(self.intensity)
+        terminal.set_intensity(self.brightness_at(frame))
         for i, j in EDGES:
             terminal.vector(points[i][0], points[i][1], points[j][0], points[j][1])
         return len(EDGES)
+
+
+class RippleFloor:
+    """A perspective grid below the cube that ripples and fades into the distance.
+
+    Horizontal contour lines lie on a floor plane and recede from the bottom of
+    the screen toward a horizon near centre; a slow travelling sine wave ripples
+    their height, and each row dims with depth so the far edge fades into the
+    background. It shares the cube's focal length so the cube reads as flying
+    *over* it.
+    """
+
+    def __init__(
+        self,
+        focal: float,
+        *,
+        cols: int = 9,
+        rows: int = 6,
+        width: float = 1.5,
+        base_y: float = -1.0,
+        near: float = 3.0,
+        far: float = 22.0,
+        amplitude: float = 0.14,
+        wave_x: float = 2.2,
+        wave_z: float = 0.55,
+        speed: float = 0.06,
+        near_intensity: int = 9,
+        far_intensity: int = 1,
+    ) -> None:
+        self.focal = focal
+        self.cols = max(2, cols)
+        self.rows = max(2, rows)
+        self.width = width
+        self.base_y = base_y
+        self.near = near
+        self.far = far
+        self.amplitude = amplitude
+        self.wave_x = wave_x
+        self.wave_z = wave_z
+        self.speed = speed
+        self.near_intensity = near_intensity
+        self.far_intensity = far_intensity
+
+    def draw(self, terminal: VectorTerminal, frame: int) -> int:
+        """Draw the rippling, depth-fading floor; returns the segment count."""
+        phase = frame * self.speed
+        segments = 0
+        for r in range(self.rows):
+            frac = r / (self.rows - 1)  # 0 = nearest row, 1 = farthest
+            depth = self.near + (self.far - self.near) * frac
+            intensity = round(
+                self.near_intensity + (self.far_intensity - self.near_intensity) * frac
+            )
+            points: list[tuple[float, float]] = []
+            for c in range(self.cols):
+                x = (c / (self.cols - 1) - 0.5) * 2.0 * self.width
+                y = self.base_y + self.amplitude * math.sin(
+                    self.wave_x * x + self.wave_z * depth + phase
+                )
+                points.append((self.focal * x / depth, self.focal * y / depth))
+            terminal.set_intensity(max(1, intensity))
+            terminal.polyline(points)
+            segments += self.cols - 1
+        return segments
+
+
+def draw_scene(
+    terminal: VectorTerminal, cube: SpinningCube, floor: RippleFloor | None, frame: int
+) -> int:
+    """Draw the floor (if any) then the cube into the current frame.
+
+    The floor is drawn first so the brighter cube overlays it; returns the total
+    vector count.
+    """
+    vectors = floor.draw(terminal, frame) if floor is not None else 0
+    vectors += cube.draw(terminal, frame)
+    return vectors
 
 
 # --- CLI ------------------------------------------------------------------
@@ -184,6 +277,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cube.add_argument("--roam-y", type=float, default=120.0, help="screen roam amplitude, Y")
     cube.add_argument("--period", type=int, default=120, help="frames per loop (smaller = faster)")
     cube.add_argument("--intensity", type=int, default=15, help="beam brightness 0-15")
+    cube.add_argument(
+        "--no-floor", action="store_true", help="hide the rippling floor mesh under the cube"
+    )
 
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
@@ -223,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     # fps "auto" -> None (the device paces the stream); else a numeric target.
     fps = None if str(args.fps).lower() == "auto" else float(args.fps)
     cube = make_cube(args)
+    floor = None if args.no_floor else RippleFloor(cube.focal)
 
     if args.preview:
         from pyvterm.preview import PreviewTransport
@@ -233,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Rendering {n_frames} frames to {args.preview} ...")
         for frame in range(n_frames):
             with terminal.frame():
-                cube.draw(terminal, frame)
+                draw_scene(terminal, cube, floor, frame)
         saved = terminal.transport.save_apng(args.preview, fps=fps or 30.0)  # type: ignore[attr-defined]
         print(f"Wrote {args.preview} ({saved} frames, {args.width}x{args.height})")
         return 0
@@ -251,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         while args.frames == 0 or drawn < args.frames:
             with terminal.frame():
-                vectors = cube.draw(terminal, drawn)
+                vectors = draw_scene(terminal, cube, floor, drawn)
             if args.dry_run:
                 last = terminal.transport.frames[-1]  # type: ignore[attr-defined]
                 print(
