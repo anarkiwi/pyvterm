@@ -37,7 +37,7 @@ variant also has a small device→host channel for capability discovery
 
 | Setting | Value |
 | --- | --- |
-| Device | `/dev/ttyACM0` (Linux), `/dev/tty.usbmodem*` (macOS), `COMx` (Windows) |
+| Device | default `/dev/ttyUSB0` (USB-TTL on Linux); a USB-CDC gadget is `/dev/ttyACM0` (Linux) / `/dev/tty.usbmodem*` (macOS) / `COMx` (Windows) |
 | Nominal baud rate | `2000000` (2 Mbaud) |
 | Data bits | 8 |
 | Parity | none |

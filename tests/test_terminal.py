@@ -1,6 +1,7 @@
 """Tests for the high-level VectorTerminal using an in-memory transport."""
 
-from pyvterm import MemoryTransport, VectorTerminal, protocol
+import pyvterm.terminal as terminal_mod
+from pyvterm import FrameTiming, MemoryTransport, VectorTerminal, protocol
 
 # Same hand-assembled frame as test_frame.py.
 EXPECTED = (
@@ -45,6 +46,37 @@ def test_send_keepalive_writes_keepalive_word():
 def test_last_timing_defaults_to_none():
     vt = VectorTerminal(transport=MemoryTransport())
     assert vt.last_timing is None
+
+
+def test_pace_numeric_sleeps_one_over_fps(monkeypatch):
+    calls: list[float] = []
+    monkeypatch.setattr(terminal_mod.time, "sleep", calls.append)
+    vt = VectorTerminal(transport=MemoryTransport())
+    vt.pace(50.0)
+    assert calls == [1.0 / 50.0]
+
+
+def test_pace_auto_adds_no_sleep_under_flow_control(monkeypatch):
+    # An active handshake already paces the loop, so auto adds no sleep.
+    calls: list[float] = []
+    monkeypatch.setattr(terminal_mod.time, "sleep", calls.append)
+    mt = MemoryTransport()
+    mt.flow_control = 0x06  # type: ignore[attr-defined]
+    vt = VectorTerminal(transport=mt)
+    vt.pace(None)
+    assert calls == []
+
+
+def test_pace_auto_falls_back_to_draw_time_without_back_pressure(monkeypatch):
+    # No flow control: auto pacing uses the device-reported draw time.
+    calls: list[float] = []
+    monkeypatch.setattr(terminal_mod.time, "sleep", calls.append)
+    mt = MemoryTransport()
+    mt.flow_control = None  # type: ignore[attr-defined]
+    mt.last_timing = FrameTiming(draw_us=20_000, vectors=10, overflow=False, idle=False)
+    vt = VectorTerminal(transport=mt)
+    vt.pace(None)
+    assert calls == [20_000 / 1_000_000]
 
 
 def test_close_sends_exit_and_closes_transport():

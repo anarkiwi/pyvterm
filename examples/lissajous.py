@@ -12,9 +12,9 @@ streams it to the device.
 
 Examples
 --------
-Run on real hardware (USB-DVG / PiTrex on /dev/ttyACM0)::
+Run on real hardware (USB-DVG / PiTrex on /dev/ttyUSB0)::
 
-    python examples/lissajous.py --port /dev/ttyACM0
+    python examples/lissajous.py --port /dev/ttyUSB0
 
 Try it without any hardware (prints per-frame byte counts and exits)::
 
@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import time
 
 from pyvterm import DEFAULT_BAUDRATE, DEFAULT_PORT, MemoryTransport, VectorTerminal
 
@@ -62,7 +61,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--speed", type=float, default=0.05, help="phase increment (radians) per frame"
     )
-    parser.add_argument("--fps", type=float, default=30.0, help="target frames per second")
+    parser.add_argument(
+        "--fps",
+        default="auto",
+        help="target frames per second, or 'auto' (default) to let the device pace the stream",
+    )
     parser.add_argument(
         "--frames", type=int, default=0, help="number of frames to draw (0 = run forever)"
     )
@@ -81,6 +84,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # fps "auto" -> None (the device paces the stream); else a numeric target.
+    fps = None if str(args.fps).lower() == "auto" else float(args.fps)
 
     if args.preview:
         from pyvterm.preview import PreviewTransport
@@ -95,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             with terminal.frame():
                 terminal.set_intensity(args.intensity)
                 terminal.polyline(points)
-        saved = terminal.transport.save_apng(args.preview, fps=args.fps)  # type: ignore[attr-defined]
+        saved = terminal.transport.save_apng(args.preview, fps=fps or 30.0)  # type: ignore[attr-defined]
         print(f"Wrote {args.preview} ({saved} frames, {args.width}x{args.height})")
         return 0
 
@@ -108,7 +113,6 @@ def main(argv: list[str] | None = None) -> int:
 
     delta = 0.0
     drawn = 0
-    period = 1.0 / args.fps if args.fps > 0 else 0.0
     try:
         while args.frames == 0 or drawn < args.frames:
             points = lissajous_points(args.a, args.b, delta, args.samples, args.amp_x, args.amp_y)
@@ -125,8 +129,7 @@ def main(argv: list[str] | None = None) -> int:
 
             delta += args.speed
             drawn += 1
-            if period:
-                time.sleep(period)
+            terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

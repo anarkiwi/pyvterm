@@ -23,9 +23,9 @@ motion repeats seamlessly — the ``--preview`` animation loops without a seam.
 
 Examples
 --------
-Run on real hardware (USB-DVG / PiTrex on /dev/ttyACM0)::
+Run on real hardware (USB-DVG / PiTrex on /dev/ttyUSB0)::
 
-    python examples/cube3d.py --port /dev/ttyACM0
+    python examples/cube3d.py --port /dev/ttyUSB0
 
 Without any hardware (prints per-frame byte/vector counts and the distance)::
 
@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import time
 
 from pyvterm import DEFAULT_BAUDRATE, DEFAULT_PORT, MemoryTransport, VectorTerminal
 
@@ -189,7 +188,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
     out.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
-    out.add_argument("--fps", type=float, default=30.0, help="target frames per second")
+    out.add_argument(
+        "--fps",
+        default="auto",
+        help="target frames per second, or 'auto' (default) to let the device pace the stream",
+    )
     out.add_argument("--frames", type=int, default=0, help="frames to run (0 = forever)")
     out.add_argument("--dry-run", action="store_true", help="don't open a serial port")
     out.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
@@ -212,6 +215,8 @@ def make_cube(args: argparse.Namespace) -> SpinningCube:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # fps "auto" -> None (the device paces the stream); else a numeric target.
+    fps = None if str(args.fps).lower() == "auto" else float(args.fps)
     cube = make_cube(args)
 
     if args.preview:
@@ -224,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         for frame in range(n_frames):
             with terminal.frame():
                 cube.draw(terminal, frame)
-        saved = terminal.transport.save_apng(args.preview, fps=args.fps)  # type: ignore[attr-defined]
+        saved = terminal.transport.save_apng(args.preview, fps=fps or 30.0)  # type: ignore[attr-defined]
         print(f"Wrote {args.preview} ({saved} frames, {args.width}x{args.height})")
         return 0
 
@@ -235,7 +240,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
         terminal = VectorTerminal(port=args.port, baudrate=args.baud)
 
-    period = 1.0 / args.fps if args.fps > 0 else 0.0
     drawn = 0
     try:
         while args.frames == 0 or drawn < args.frames:
@@ -248,8 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"{vectors} vectors, dist={cube.distance_at(drawn):4.1f}"
                 )
             drawn += 1
-            if period:
-                time.sleep(period)
+            terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

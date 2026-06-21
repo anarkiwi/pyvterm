@@ -47,8 +47,9 @@ pyvterm requires Python 3.9+ and depends only on [`pyserial`](https://pypi.org/p
 ```python
 from pyvterm import VectorTerminal
 
-# Open the serial link (USB-CDC device shows up as /dev/ttyACM0 on Linux).
-with VectorTerminal(port="/dev/ttyACM0") as vt:
+# Open the serial link (a USB-TTL adapter shows up as /dev/ttyUSB0 on Linux,
+# pyvterm's default; a USB-CDC USB-DVG gadget is /dev/ttyACM0 instead).
+with VectorTerminal(port="/dev/ttyUSB0") as vt:
     with vt.frame():                 # clears, then sends on exit
         vt.set_intensity(15)          # full brightness (0 = beam off)
         vt.polyline(                  # a centred square
@@ -115,7 +116,7 @@ display:
 
 ```bash
 # On real hardware:
-python examples/lissajous.py --port /dev/ttyACM0
+python examples/lissajous.py --port /dev/ttyUSB0
 
 # Without hardware (prints per-frame byte counts):
 python examples/lissajous.py --dry-run --frames 5
@@ -141,7 +142,7 @@ loops seamlessly over one `--period`.*
 
 ```bash
 # On real hardware:
-python examples/cube3d.py --port /dev/ttyACM0
+python examples/cube3d.py --port /dev/ttyUSB0
 
 # Without hardware (prints per-frame byte/vector counts and distance):
 python examples/cube3d.py --dry-run --frames 5
@@ -179,7 +180,7 @@ pip install "pyvterm[preview]"
 python examples/spectrum3d.py --synthetic --preview spectrum3d.png
 
 # Or just stream synthetic audio to a real Vectrex:
-python examples/spectrum3d.py --synthetic --port /dev/ttyACM0
+python examples/spectrum3d.py --synthetic --port /dev/ttyUSB0
 ```
 
 ### Rutt-Etra video scan processing
@@ -202,10 +203,10 @@ spacing) and `--fps` down further if your display flickers.
 ```bash
 # Live webcam to a real Vectrex (needs OpenCV):
 pip install "pyvterm[video]"
-python examples/ruttetra.py --video 0 --port /dev/ttyACM0
+python examples/ruttetra.py --video 0 --port /dev/ttyUSB0
 
 # A video file, downscaled and slowed for the Vectrex:
-python examples/ruttetra.py --video clip.mp4 --cols 40 --rows 22 --fps 12 --port /dev/ttyACM0
+python examples/ruttetra.py --video clip.mp4 --cols 40 --rows 22 --fps 12 --port /dev/ttyUSB0
 
 # No camera? Render the animated PNG above from the synthetic scene:
 pip install "pyvterm[preview]"
@@ -221,15 +222,17 @@ authoritative reference for the header location and exact wiring.
 
 - **USB gadget port (simplest, easily fast enough).** The Pi Zero's *data*
   micro-USB port — the inner one marked **USB**, not **PWR** — can act as a
-  USB-CDC serial gadget and shows up on your PC as `/dev/ttyACM0`, pyvterm's
-  default port. USB-CDC ignores the line rate, so the nominal 2 Mbaud is met with
+  USB-CDC serial gadget and shows up on your PC as `/dev/ttyACM0` (pass
+  `port="/dev/ttyACM0"`). USB-CDC ignores the line rate, so the nominal 2 Mbaud is met with
   room to spare and **no serial adapter is required** — just a micro-USB-to-USB-A
   *data* cable. Remove the **POWER FROM VEC.** jumper first, since the PC then
   supplies power.
 - **GPIO UART header.** Alternatively wire a USB-to-TTL adapter to the Pi Zero
   header pins **1 (3.3 V), 6 (GND), 8 (Tx, GPIO14), 10 (Rx, GPIO15)**, crossing
   Tx↔Rx, and set `enable_uart=1` in `config.txt` (this is the guide's documented
-  serial-console path). Going this route, the adapter itself must keep up.
+  serial-console path). The adapter shows up on your PC as `/dev/ttyUSB0` —
+  pyvterm's default port, and the link the baremetal `vekterm` receiver uses.
+  Going this route, the adapter itself must keep up.
 
 ### Choosing a USB-to-serial adapter
 
@@ -257,8 +260,9 @@ path unless you specifically need the UART pins.
 
 ### Notes
 
-- Host device path: `/dev/ttyACM0` (Linux), `/dev/tty.usbmodem*` (macOS), or
-  `COMx` (Windows).
+- Host device path: default `/dev/ttyUSB0` (a USB-TTL adapter on Linux); a
+  USB-CDC USB-DVG gadget instead enumerates as `/dev/ttyACM0` (Linux),
+  `/dev/tty.usbmodem*` (macOS), or `COMx` (Windows). Pass `port=` to override.
 - `SerialTransport` waits ~2 s after opening before flushing buffers (the
   reference driver does the same "to make flush work, for some reason"); pass
   `settle=0` to skip it.
