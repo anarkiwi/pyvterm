@@ -9,7 +9,7 @@ Python.
 Quick start
 -----------
 >>> from pyvterm import VectorTerminal
->>> with VectorTerminal(port="/dev/ttyACM0") as vt:   # doctest: +SKIP
+>>> with VectorTerminal(port="/dev/ttyUSB0") as vt:   # doctest: +SKIP
 ...     with vt.frame():
 ...         vt.set_intensity(15)
 ...         vt.polyline([(0, 0), (100, 100), (-100, 100)], closed=True)

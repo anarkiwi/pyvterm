@@ -10,7 +10,7 @@ itself).
 Example
 -------
 >>> from pyvterm import VectorTerminal
->>> with VectorTerminal(port="/dev/ttyACM0") as vt:  # doctest: +SKIP
+>>> with VectorTerminal(port="/dev/ttyUSB0") as vt:  # doctest: +SKIP
 ...     with vt.frame():
 ...         vt.set_intensity(15)
 ...         vt.polyline([(-100, -100), (100, -100), (100, 100), (-100, 100)], closed=True)
@@ -19,6 +19,7 @@ Example
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -164,6 +165,27 @@ class VectorTerminal:
         complexity, e.g. ``time.sleep(max(0, target_dt - draw_us / 1e6))``.
         """
         return getattr(self.transport, "last_timing", None)
+
+    def pace(self, fps: float | None) -> None:
+        """Sleep to honour a frame rate, or auto-adapt to the device when ``fps``
+        is ``None``.
+
+        A positive ``fps`` caps the rate at ``1/fps`` seconds per frame. ``None``
+        (or ``<= 0``) means *auto*: when flow control is active the send already
+        blocks until the device signals it is ready, so the loop is paced at the
+        device's true rate and no extra sleep is added; when there is no
+        back-pressure (a USB-CDC device, or flow control auto-disabled) it falls
+        back to the device-reported draw time (:attr:`last_timing`) so a fast
+        sender can't overrun a slow draw.
+        """
+        if fps is not None and fps > 0:
+            time.sleep(1.0 / fps)
+            return
+        if getattr(self.transport, "flow_control", None) is not None:
+            return  # flow control already paces us at the device's real rate
+        timing = self.last_timing
+        if timing is not None and timing.draw_us > 0:
+            time.sleep(timing.draw_us / 1_000_000)
 
     def send_keepalive(self) -> bytes:
         """Send a keepalive ping so an idle receiver holds the current frame.

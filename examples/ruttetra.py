@@ -16,11 +16,11 @@ Examples
 --------
 Live webcam (needs OpenCV: ``pip install "pyvterm[video]"``)::
 
-    python examples/ruttetra.py --video 0 --port /dev/ttyACM0
+    python examples/ruttetra.py --video 0 --port /dev/ttyUSB0
 
 A video file, downscaled and slowed for the Vectrex::
 
-    python examples/ruttetra.py --video clip.mp4 --cols 40 --rows 22 --fps 12 --port /dev/ttyACM0
+    python examples/ruttetra.py --video clip.mp4 --cols 40 --rows 22 --fps 12 --port /dev/ttyUSB0
 
 No camera / off-Linux? Render the built-in synthetic scene to an animated PNG::
 
@@ -33,7 +33,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import math
-import time
 
 import numpy as np
 
@@ -277,9 +276,13 @@ class RuttEtra:
 # --- CLI ------------------------------------------------------------------
 
 
-def make_source(args: argparse.Namespace) -> SyntheticVideoSource | Cv2VideoSource:
+def make_source(
+    args: argparse.Namespace, target_fps: float | None
+) -> SyntheticVideoSource | Cv2VideoSource:
     if args.video is not None:
-        return Cv2VideoSource(args.video, target_fps=args.fps)
+        # target_fps None ("auto") means decode every frame and let the device
+        # pace playback; a numeric value frame-skips to that rate.
+        return Cv2VideoSource(args.video, target_fps=target_fps)
     if not args.synthetic and not args.preview:
         print(
             "No --video given; using the synthetic scene (pass --video FILE|INDEX for real video)."
@@ -327,11 +330,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
     out.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
-    out.add_argument("--fps", type=float, default=18.0, help="target frames per second")
     out.add_argument(
-        "--adaptive-fps",
-        action="store_true",
-        help="cap the rate at what the device reports it can draw (vekterm v2 timing)",
+        "--fps",
+        default="auto",
+        help="target frames per second, or 'auto' (default) to let the device pace "
+        "the stream (flow control / vekterm v2 draw-time timing)",
     )
     out.add_argument(
         "--frames", type=int, default=0, help="frames to run (0 = until end / forever)"
@@ -345,7 +348,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    source = make_source(args)
+    # fps "auto" -> None (the device paces the stream); else a numeric target.
+    fps = None if str(args.fps).lower() == "auto" else float(args.fps)
+    source = make_source(args, fps)
     processor = RuttEtra(
         args.cols,
         args.rows,
@@ -379,7 +384,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 with terminal.frame():
                     processor.draw(terminal, frame)
-        saved = terminal.transport.save_apng(args.preview, fps=args.fps)  # type: ignore[attr-defined]
+        saved = terminal.transport.save_apng(args.preview, fps=fps or 18.0)  # type: ignore[attr-defined]
         source.close()
         print(f"Wrote {args.preview} ({saved} frames, {args.width}x{args.height})")
         return 0
@@ -401,7 +406,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.heightfield and not terminal.supports(Capability.HEIGHTFIELD):
         print("(heightfield encoded then expanded to base XY — no on-wire savings without vekterm)")
 
-    period = 1.0 / args.fps if args.fps > 0 else 0.0
     drawn = 0
     kwargs: dict = {}
     try:
@@ -427,14 +431,9 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(f"frame {drawn:>4}: {len(last):>5} bytes, {vectors} vectors")
             drawn += 1
-            # Never push frames faster than the receiver can draw them: vekterm
-            # reports the last frame's draw time in its sync reply, so a complex
-            # scene (high draw_us) automatically slows the send rate.
-            delay = period
-            if args.adaptive_fps and terminal.last_timing is not None:
-                delay = max(period, terminal.last_timing.draw_us / 1_000_000)
-            if delay:
-                time.sleep(delay)
+            # Pace the stream: a numeric --fps caps the rate; "auto" lets flow
+            # control (and vekterm's v2 draw-time timing) set it from the device.
+            terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

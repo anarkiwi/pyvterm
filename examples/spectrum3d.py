@@ -32,7 +32,7 @@ Audio input
 
 Output
 ------
-* ``--port /dev/ttyACM0`` streams to real hardware (the default).
+* ``--port /dev/ttyUSB0`` streams to real hardware (the default).
 * ``--dry-run`` builds frames without opening a serial port.
 * ``--preview out.png`` renders an **animated PNG** simulating the glowing
   vector display (no hardware needed), then exits::
@@ -528,7 +528,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     disp = parser.add_argument_group("display")
     disp.add_argument("--bins", type=int, default=DEFAULT_BINS, help="frequency bins (X axis)")
     disp.add_argument("--history", type=int, default=DEFAULT_HISTORY, help="waterfall depth (rows)")
-    disp.add_argument("--fps", type=float, default=25.0, help="target frames per second")
+    disp.add_argument(
+        "--fps",
+        default="auto",
+        help="target frames per second, or 'auto' (default) to let the device pace the stream",
+    )
     disp.add_argument(
         "--scale",
         type=float,
@@ -576,6 +580,8 @@ def make_source(args: argparse.Namespace) -> SyntheticSource | AlsaSource:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # fps "auto" -> None (the device paces the stream); else a numeric target.
+    fps = None if str(args.fps).lower() == "auto" else float(args.fps)
     source = make_source(args)
     analyzer = Analyzer(
         args.rate,
@@ -600,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
             detector,
             rotate,
             frames=args.frames or 120,
-            fps=args.fps,
+            fps=fps or 25.0,
             width=args.width,
             height=args.height,
         )
@@ -614,9 +620,6 @@ def main(argv: list[str] | None = None) -> int:
         flow = None if args.no_flow_control else DEFAULT_SYNC_BYTE
         terminal = VectorTerminal(port=args.port, baudrate=args.baud, flow_control=flow)
 
-    import time
-
-    period = 1.0 / args.fps if args.fps > 0 else 0.0
     drawn = 0
     try:
         while args.frames == 0 or drawn < args.frames:
@@ -631,8 +634,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"yaw={math.degrees(camera.yaw):+5.0f}deg{tag}"
                 )
             drawn += 1
-            if period:
-                time.sleep(period)
+            terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

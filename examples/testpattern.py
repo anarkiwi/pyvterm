@@ -103,7 +103,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=12,
         help="approx. number of vectors (link stress knob)",
     )
-    p.add_argument("--fps", type=float, default=30.0, help="frames per second")
+    p.add_argument(
+        "--fps",
+        default="auto",
+        help="frames per second, or 'auto' (default) to let the device pace the stream",
+    )
     p.add_argument("--frames", type=int, default=0, help="frames to send (0 = forever)")
     p.add_argument("--dry-run", action="store_true", help="don't open a port; print frame bytes")
     p.add_argument("--preview", metavar="OUT.png", help="render the pattern to a PNG and exit")
@@ -118,6 +122,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # fps "auto" -> None (the device paces the stream); else a numeric target.
+    fps = None if str(args.fps).lower() == "auto" else float(args.fps)
 
     if args.preview:
         from pyvterm.preview import PreviewTransport
@@ -125,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         vt = VectorTerminal(transport=PreviewTransport(width=440, height=330))
         with vt.frame():
             draw_pattern(vt, args.intensity, args.vectors)
-        vt.transport.save_apng(args.preview, fps=args.fps)  # type: ignore[attr-defined]
+        vt.transport.save_apng(args.preview, fps=fps or 30.0)  # type: ignore[attr-defined]
         print(f"Wrote {args.preview}")
         return 0
 
@@ -140,7 +146,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Opening {args.port} at {args.baud} baud...")
     flow = None if args.no_flow_control else DEFAULT_SYNC_BYTE
     vt = VectorTerminal(port=args.port, baudrate=args.baud, flow_control=flow)
-    period = 1.0 / args.fps if args.fps > 0 else 0.0
     count = 0
     last_report = time.monotonic()
     try:
@@ -157,8 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                 skipped = getattr(t, "frames_skipped", "?")
                 print(f"flow-control: sent={sent} skipped={skipped}")
                 last_report = now
-            if period:
-                time.sleep(period)
+            vt.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

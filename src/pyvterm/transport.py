@@ -27,8 +27,10 @@ __all__ = [
 
 #: USB-CDC devices ignore the line rate, but the reference driver requests 2 Mbaud.
 DEFAULT_BAUDRATE = 2_000_000
-#: Default device path created by the USB-DVG / pitrex CDC gadget on Linux.
-DEFAULT_PORT = "/dev/ttyACM0"
+#: Default serial device path. ``/dev/ttyUSB0`` is the usual USB-TTL adapter to a
+#: raw-UART receiver (e.g. vekterm on a PiTrex); a USB-CDC USB-DVG gadget instead
+#: appears as ``/dev/ttyACM0`` — pass ``port=`` to override.
+DEFAULT_PORT = "/dev/ttyUSB0"
 #: Byte a flow-controlled receiver (e.g. vekterm on a raw UART) sends to say
 #: "ready for the next frame" on the base (v1) protocol. USB-CDC devices don't
 #: need this; raw-UART ones do.
@@ -136,7 +138,7 @@ class SerialTransport(Transport):
     Parameters
     ----------
     port:
-        Serial device path (e.g. ``/dev/ttyACM0`` or ``COM3``).
+        Serial device path (e.g. ``/dev/ttyUSB0`` or ``COM3``).
     baudrate:
         Nominal line rate; ignored by USB-CDC devices but set to match the
         reference driver.
