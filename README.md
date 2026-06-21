@@ -263,6 +263,12 @@ path unless you specifically need the UART pins.
 - Host device path: default `/dev/ttyUSB0` (a USB-TTL adapter on Linux); a
   USB-CDC USB-DVG gadget instead enumerates as `/dev/ttyACM0` (Linux),
   `/dev/tty.usbmodem*` (macOS), or `COMx` (Windows). Pass `port=` to override.
+- Baud rate: the default is `baudrate="auto"`, which probes the candidate rates
+  (`DEFAULT_BAUD_CANDIDATES`, matching vekterm's cycleable splash options) with
+  the `HELLO` capability probe and keeps the one the receiver answers on — so a
+  raw-UART receiver is found whatever rate its operator selected. Pass a number
+  (e.g. `baudrate=2_000_000`) to skip detection; a USB-CDC device ignores the
+  rate anyway and falls back to `2 Mbaud` if nothing answers.
 - `SerialTransport` waits ~2 s after opening before flushing buffers (the
   reference driver does the same "to make flush work, for some reason"); pass
   `settle=0` to skip it.

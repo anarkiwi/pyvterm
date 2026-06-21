@@ -189,10 +189,15 @@ class _FakeSerial:
 
 
 def _terminal_with_fake(reply: bytes = HELLO_REPLY) -> VectorTerminal:
-    from pyvterm.transport import SerialTransport
+    from pyvterm.transport import DEFAULT_BAUDRATE, SerialTransport
 
+    # A fixed baud skips auto-detection (it would consume the one-shot reply);
+    # these tests exercise negotiate() explicitly.
     transport = SerialTransport(
-        "loop", settle=0, serial_factory=lambda **kw: _FakeSerial(reply, **kw)
+        "loop",
+        baudrate=DEFAULT_BAUDRATE,
+        settle=0,
+        serial_factory=lambda **kw: _FakeSerial(reply, **kw),
     )
     return VectorTerminal(transport=transport)
 

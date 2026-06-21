@@ -26,7 +26,7 @@ from typing import Any
 from . import ext, protocol
 from .frame import FrameBuilder
 from .protocol import DEFAULT_BOUNDS, DVG_RENDER_QUALITY, Bounds, Capability, HelloDescriptor
-from .transport import DEFAULT_BAUDRATE, DEFAULT_PORT, FrameTiming, SerialTransport, Transport
+from .transport import BAUD_AUTO, DEFAULT_PORT, FrameTiming, SerialTransport, Transport
 
 __all__ = ["VectorTerminal"]
 
@@ -47,7 +47,7 @@ class VectorTerminal:
         transport: Transport | None = None,
         *,
         port: str | None = None,
-        baudrate: int = DEFAULT_BAUDRATE,
+        baudrate: int | str = BAUD_AUTO,
         bounds: Bounds = DEFAULT_BOUNDS,
         clip_window: Window | None = None,
         quality: int = DVG_RENDER_QUALITY,
@@ -78,7 +78,7 @@ class VectorTerminal:
 
     @classmethod
     def open(
-        cls, port: str = DEFAULT_PORT, baudrate: int = DEFAULT_BAUDRATE, **kwargs: Any
+        cls, port: str = DEFAULT_PORT, baudrate: int | str = BAUD_AUTO, **kwargs: Any
     ) -> VectorTerminal:
         """Open a serial terminal on ``port`` (``zvgFrameOpen``)."""
         return cls(port=port, baudrate=baudrate, **kwargs)

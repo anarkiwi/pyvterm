@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pyvterm.transport import MemoryTransport, SerialTransport
+from pyvterm.transport import DEFAULT_BAUDRATE, MemoryTransport, SerialTransport
 
 
 def test_memory_transport_records_writes():
@@ -64,8 +64,10 @@ def _make(**kw: Any) -> tuple[SerialTransport, FakeSerial]:
         return fake
 
     # These tests exercise raw writes; flow control is on by default but is
-    # covered by its own tests, so default it off here unless asked for.
+    # covered by its own tests, so default it off here unless asked for. A fixed
+    # baud skips auto-detection (covered by its own tests).
     kw.setdefault("flow_control", None)
+    kw.setdefault("baudrate", DEFAULT_BAUDRATE)
     transport = SerialTransport("/dev/ttyTEST", settle=0, serial_factory=factory, **kw)
     return transport, captured["fake"]
 
@@ -183,3 +185,87 @@ def test_serial_transport_read_flush_close_delegate():
     assert fake.flushed == 1
     transport.close()
     assert fake.closed is True
+
+
+# --- baud auto-detection --------------------------------------------------
+
+# A valid 12-byte HELLO descriptor (VK, v2, caps HF|POLYLINE|INT, ...).
+_HELLO_REPLY = bytes.fromhex("564b02070c080bb820003200")
+
+
+class AutoBaudFakeSerial:
+    """Fake that answers the HELLO probe only when tuned to ``target_baud``."""
+
+    def __init__(self, target_baud: int | None, **kwargs: Any) -> None:
+        self.target_baud = target_baud
+        self.baudrate = kwargs.get("baudrate")
+        self.kwargs = kwargs
+        self.writes: list[bytes] = []
+        self._pending = b""
+
+    def write(self, data: Any) -> int:
+        from pyvterm import protocol
+
+        d = bytes(data)
+        self.writes.append(d)
+        # A real receiver only frames the reply correctly at the right baud.
+        if d == protocol.hello_word() and self.baudrate == self.target_baud:
+            self._pending += _HELLO_REPLY
+        return len(d)
+
+    def read(self, size: int) -> bytes:
+        out, self._pending = self._pending[:size], self._pending[size:]
+        return out
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._pending)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+    def reset_input_buffer(self) -> None:
+        self._pending = b""
+
+    def reset_output_buffer(self) -> None:
+        pass
+
+
+def _make_autobaud(target: int | None, **kw: Any) -> tuple[SerialTransport, AutoBaudFakeSerial]:
+    captured: dict[str, AutoBaudFakeSerial] = {}
+
+    def factory(**kwargs: Any) -> AutoBaudFakeSerial:
+        fake = AutoBaudFakeSerial(target, **kwargs)
+        captured["fake"] = fake
+        return fake
+
+    kw.setdefault("baudrate", "auto")
+    kw.setdefault("detect_timeout", 0.02)
+    transport = SerialTransport("/dev/ttyTEST", settle=0, serial_factory=factory, **kw)
+    return transport, captured["fake"]
+
+
+def test_detect_baud_finds_the_matching_rate():
+    # The receiver answers HELLO only at 921600; detection should land there.
+    transport, fake = _make_autobaud(921_600)
+    assert transport.baudrate == 921_600
+    assert fake.baudrate == 921_600
+    assert transport._v2 is True
+
+
+def test_detect_baud_falls_back_to_default_when_silent():
+    # Nothing answers at any baud -> settle on DEFAULT_BAUDRATE and stay v1.
+    transport, _ = _make_autobaud(None)
+    assert transport.baudrate == DEFAULT_BAUDRATE
+    assert transport._v2 is False
+
+
+def test_explicit_baud_skips_detection():
+    # A concrete baudrate never probes for HELLO.
+    transport, fake = _make_autobaud(2_000_000, baudrate=500_000)
+    assert transport.baudrate == 500_000
+    assert fake.writes == []  # no HELLO probe written
+    assert transport._v2 is False
