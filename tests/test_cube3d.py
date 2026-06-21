@@ -91,8 +91,60 @@ def test_draw_reports_edge_count():
     assert drawn == 12
 
 
+def test_brightness_brightens_up_close():
+    cube = cube3d.SpinningCube(distance=6.0, zoom=0.4, intensity=15)
+    frames = range(cube.period)
+    near = min(frames, key=cube.distance_at)  # closest -> brightest
+    far = max(frames, key=cube.distance_at)  # farthest -> dimmest
+    assert cube.brightness_at(near) > cube.brightness_at(far)
+    assert all(1 <= cube.brightness_at(f) <= 15 for f in frames)
+
+
+def test_zoom_zero_keeps_constant_brightness():
+    cube = cube3d.SpinningCube(zoom=0.0, intensity=12)
+    assert all(cube.brightness_at(f) == 12 for f in range(cube.period))
+
+
+def test_ripple_floor_segment_count_and_ripples_over_time():
+    from pyvterm import MemoryTransport, VectorTerminal
+
+    floor = cube3d.RippleFloor(focal=720.0, rows=6, cols=9)
+    vt = VectorTerminal(transport=MemoryTransport())
+    with vt.frame():
+        segments = floor.draw(vt, 0)
+    assert segments == 6 * (9 - 1)
+
+    # The travelling wave means a later frame draws a different shape.
+    a = VectorTerminal(transport=MemoryTransport())
+    with a.frame():
+        floor.draw(a, 0)
+    b = VectorTerminal(transport=MemoryTransport())
+    with b.frame():
+        floor.draw(b, 40)
+    assert a.transport.getvalue() != b.transport.getvalue()  # type: ignore[attr-defined]
+
+
+def test_draw_scene_counts_floor_and_cube():
+    from pyvterm import MemoryTransport, VectorTerminal
+
+    cube = cube3d.SpinningCube()
+    floor = cube3d.RippleFloor(cube.focal, rows=6, cols=9)
+    vt = VectorTerminal(transport=MemoryTransport())
+    with vt.frame():
+        total = cube3d.draw_scene(vt, cube, floor, 5)
+    assert total == 6 * (9 - 1) + 12
+    # Without a floor, only the cube's edges.
+    vt2 = VectorTerminal(transport=MemoryTransport())
+    with vt2.frame():
+        assert cube3d.draw_scene(vt2, cube, None, 5) == 12
+
+
 def test_main_dry_run_returns_zero():
     assert cube3d.main(["--dry-run", "--frames", "3", "--fps", "0"]) == 0
+
+
+def test_main_dry_run_no_floor():
+    assert cube3d.main(["--dry-run", "--frames", "3", "--fps", "0", "--no-floor"]) == 0
 
 
 def test_preview_writes_animated_png(tmp_path):

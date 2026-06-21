@@ -9,13 +9,15 @@ bright trace at the front; older spectra shrink and rise into the back.
 The whole slab is viewed through an **orbiting perspective camera** rather than
 a fixed projection, and the camera is alive:
 
-* In steady state it **drifts slowly** — a gentle, continuous sway of the
-  viewing angle, so the perspective is never quite still.
+* By default the viewer **slowly flies around** the spectrum — orbiting all the
+  way around it while the pitch sweeps **over and under**, so you see it from
+  every side. The slab itself keeps scrolling/rendering as usual.
 * When the analyzer detects a **major change** in the audio (an onset / beat /
-  new texture, via spectral flux) the camera **swings to a fresh viewpoint**,
-  easing smoothly into a new angle that re-frames the spectrum.
+  new texture, via spectral flux) the fly-around **re-randomises** — a fresh
+  orbit speed/direction and over/under sweep, eased smoothly in.
 
-Pass ``--no-rotate`` to hold a fixed head-on view instead.
+Pass ``--no-fly`` for the gentler preset sway, or ``--no-rotate`` to hold a
+fixed head-on view instead.
 
 Audio input
 -----------
@@ -45,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 from collections import deque
 from collections.abc import Iterator
 
@@ -341,6 +344,12 @@ class Camera:
         sway_pitch: float = 0.06,
         sway_period: float = 480.0,
         presets: list[tuple[float, float]] = VIEW_PRESETS,
+        fly: bool = True,
+        orbit_period: float = 1500.0,
+        pitch_center: float = 0.25,
+        pitch_swing: float = 0.85,
+        pitch_period: float = 900.0,
+        rng: random.Random | None = None,
     ) -> None:
         self.distance = distance
         self.focal = size * distance
@@ -351,21 +360,58 @@ class Camera:
         self.presets = list(presets)
         self._view = 0
         self.base_yaw, self.base_pitch = self.presets[0]
-        # Start already settled on the first view.
-        self.yaw = self.target_yaw = self.base_yaw
-        self.pitch = self.target_pitch = self.base_pitch
         self._phase = 0.0
+        # Fly-around state: a continuous orbit (yaw) plus an over/under pitch
+        # sweep, both slowly re-randomised on a major change (see jump()).
+        self.fly = fly
+        self._rng = rng or random.Random(1)
+        self._orbit = 0.0
+        self._orbit_rate = 2.0 * math.pi / max(1.0, orbit_period)
+        self.pitch_center = pitch_center
+        self.pitch_swing = pitch_swing
+        self._pitch_phase = 0.0
+        self._pitch_rate = 2.0 * math.pi / max(1.0, pitch_period)
+        # Start settled: fly mode opens looking slightly down, preset mode on view 0.
+        if fly:
+            self.yaw = self.target_yaw = 0.0
+            self.pitch = self.target_pitch = self.pitch_center
+        else:
+            self.yaw = self.target_yaw = self.base_yaw
+            self.pitch = self.target_pitch = self.base_pitch
 
     def jump(self) -> None:
-        """Advance to the next preset viewpoint (called on a major change)."""
-        self._view = (self._view + 1) % len(self.presets)
-        self.base_yaw, self.base_pitch = self.presets[self._view]
+        """Re-aim on a major change: a new random fly path, or the next preset."""
+        if self.fly:
+            # Pick a fresh orbit speed/direction and over/under sweep so the
+            # fly-around slowly, randomly reconfigures (eased in by update()).
+            self._orbit_rate = (
+                2.0 * math.pi / self._rng.uniform(1100.0, 2400.0)
+            ) * self._rng.choice((-1.0, 1.0))
+            self.pitch_center = self._rng.uniform(0.0, 0.4)
+            self.pitch_swing = self._rng.uniform(0.6, 0.95)
+            self._pitch_rate = 2.0 * math.pi / self._rng.uniform(700.0, 1400.0)
+        else:
+            self._view = (self._view + 1) % len(self.presets)
+            self.base_yaw, self.base_pitch = self.presets[self._view]
 
     def update(self) -> None:
-        """Advance the slow sway, then ease the live angles toward their target."""
+        """Advance the camera motion, then ease the live angles toward target."""
         self._phase += self.sway_rate
-        self.target_yaw = self.base_yaw + self.sway_yaw * math.sin(self._phase)
-        self.target_pitch = self.base_pitch + self.sway_pitch * math.sin(0.73 * self._phase + 1.3)
+        if self.fly:
+            # Orbit all the way around while the pitch sweeps over and under; a
+            # slow two-tone wobble keeps the path from looking mechanical.
+            self._orbit += self._orbit_rate
+            self._pitch_phase += self._pitch_rate
+            wobble = self.sway_yaw * math.sin(0.31 * self._phase) + 0.5 * self.sway_yaw * math.sin(
+                0.17 * self._phase + 1.0
+            )
+            self.target_yaw = self._orbit + wobble
+            self.target_pitch = self.pitch_center + self.pitch_swing * math.sin(self._pitch_phase)
+        else:
+            self.target_yaw = self.base_yaw + self.sway_yaw * math.sin(self._phase)
+            self.target_pitch = self.base_pitch + self.sway_pitch * math.sin(
+                0.73 * self._phase + 1.3
+            )
         self.yaw += (self.target_yaw - self.yaw) * self.ease
         self.pitch += (self.target_pitch - self.pitch) * self.ease
 
@@ -547,6 +593,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="hold a fixed head-on view (no drift, no perspective changes)",
     )
     disp.add_argument(
+        "--no-fly",
+        action="store_true",
+        help="disable the slow fly-around (use the gentle preset sway instead)",
+    )
+    disp.add_argument(
         "--sensitivity",
         type=float,
         default=DEFAULT_SENSITIVITY,
@@ -597,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
         tilt_db_per_oct=args.tilt,
     )
     waterfall = Waterfall3D(n_bins=args.bins, history=args.history)
-    camera = Camera(size=CAM_SIZE * args.scale)
+    camera = Camera(size=CAM_SIZE * args.scale, fly=not args.no_fly)
     detector = ChangeDetector(sensitivity=args.sensitivity)
     rotate = not args.no_rotate
 
