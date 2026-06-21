@@ -9,6 +9,7 @@ rest of the library never needs to know which is in use.
 from __future__ import annotations
 
 import abc
+import contextlib
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -21,12 +22,20 @@ __all__ = [
     "SerialTransport",
     "FrameTiming",
     "DEFAULT_BAUDRATE",
+    "DEFAULT_BAUD_CANDIDATES",
+    "BAUD_AUTO",
     "DEFAULT_PORT",
     "DEFAULT_SYNC_BYTE",
 ]
 
 #: USB-CDC devices ignore the line rate, but the reference driver requests 2 Mbaud.
 DEFAULT_BAUDRATE = 2_000_000
+#: Sentinel ``baudrate`` value selecting automatic baud detection (the default).
+BAUD_AUTO = "auto"
+#: Baud rates tried, in order, when auto-detecting. Mirrors vekterm's cycleable
+#: ``VT_BAUD_OPTIONS`` so a raw-UART receiver is found whatever the operator set
+#: on its splash; the matching rate is the one whose HELLO probe gets a reply.
+DEFAULT_BAUD_CANDIDATES = (1_280_000, 2_000_000, 1_000_000, 921_600, 500_000, 115_200)
 #: Default serial device path. ``/dev/ttyUSB0`` is the usual USB-TTL adapter to a
 #: raw-UART receiver (e.g. vekterm on a PiTrex); a USB-CDC USB-DVG gadget instead
 #: appears as ``/dev/ttyACM0`` — pass ``port=`` to override.
@@ -156,7 +165,7 @@ class SerialTransport(Transport):
     def __init__(
         self,
         port: str = DEFAULT_PORT,
-        baudrate: int = DEFAULT_BAUDRATE,
+        baudrate: int | str = BAUD_AUTO,
         *,
         timeout: float | None = 1.0,
         write_timeout: float | None = None,
@@ -164,9 +173,18 @@ class SerialTransport(Transport):
         chunk_size: int = 1024,
         flow_control: int | None = DEFAULT_SYNC_BYTE,
         sync_timeout: float = 1.0,
+        baud_candidates: tuple[int, ...] = DEFAULT_BAUD_CANDIDATES,
+        detect_timeout: float = 0.3,
         serial_factory: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        #: ``True`` when the baud is to be auto-detected (``baudrate="auto"``).
+        self._auto_baud = isinstance(baudrate, str) and baudrate.lower() == BAUD_AUTO
+        self.baud_candidates = tuple(baud_candidates)
+        self.detect_timeout = detect_timeout
+        # The port must be opened at a concrete rate; auto starts at the first
+        # candidate and is retuned by detect_baud() below.
+        open_rate = self.baud_candidates[0] if self._auto_baud else int(baudrate)
         if serial_factory is None:
             try:
                 import serial
@@ -178,7 +196,7 @@ class SerialTransport(Transport):
             serial_factory = serial.Serial
 
         self.port = port
-        self.baudrate = baudrate
+        self.baudrate = open_rate
         self.chunk_size = max(1, chunk_size)
         #: When set (a byte value), wait for the receiver to send it before each
         #: frame — flow control for a raw-UART receiver with no buffering (e.g.
@@ -202,7 +220,7 @@ class SerialTransport(Transport):
         # 8N1, no flow control — matches the reference termios/DCB setup.
         self._serial = serial_factory(
             port=port,
-            baudrate=baudrate,
+            baudrate=open_rate,
             bytesize=8,
             parity="N",
             stopbits=1,
@@ -215,11 +233,54 @@ class SerialTransport(Transport):
         )
         if settle:
             time.sleep(settle)
-        # Match `tcflush(..., TCIOFLUSH)` after the settle delay.
+        self._reset_buffers()
+        if self._auto_baud:
+            self.detect_baud()
+
+    def _reset_buffers(self) -> None:
+        """Match ``tcflush(..., TCIOFLUSH)`` — drop any buffered in/out bytes."""
         for method in ("reset_input_buffer", "reset_output_buffer"):
             fn = getattr(self._serial, method, None)
             if callable(fn):
                 fn()
+
+    def _apply_baud(self, baud: int) -> None:
+        """Retune the open port to ``baud`` and clear stale handshake state."""
+        with contextlib.suppress(Exception):
+            self._serial.baudrate = baud
+        self.baudrate = baud
+        self._flow_seen = False
+        self._v2 = False
+        self._sync_buf.clear()
+        self._reset_buffers()
+
+    def detect_baud(
+        self, candidates: tuple[int, ...] | None = None, per_timeout: float | None = None
+    ) -> int | None:
+        """Find the receiver's line rate by probing each candidate baud.
+
+        Only the matching rate frames the ``HELLO`` reply correctly, so the first
+        candidate whose probe returns a descriptor is the device's baud; the port
+        is left tuned to it (and v2 is negotiated as a side effect). Returns the
+        detected baud, or ``None`` if nothing answered — in which case the port is
+        left at :data:`DEFAULT_BAUDRATE` so a USB-CDC device (which ignores the
+        line rate) still streams. Uses a short ``per_timeout`` per candidate so a
+        non-responding link doesn't stall for long.
+        """
+        candidates = candidates or self.baud_candidates
+        per_timeout = self.detect_timeout if per_timeout is None else per_timeout
+        saved = self.sync_timeout
+        self.sync_timeout = per_timeout
+        try:
+            for baud in candidates:
+                self._apply_baud(baud)
+                if self.probe_capabilities() is not None:
+                    return baud
+        finally:
+            self.sync_timeout = saved
+        # Nothing answered: settle on a sane default for a baud-agnostic link.
+        self._apply_baud(DEFAULT_BAUDRATE)
+        return None
 
     def probe_capabilities(self) -> protocol.HelloDescriptor | None:
         """Write the ``HELLO`` probe and read the device's capability descriptor.

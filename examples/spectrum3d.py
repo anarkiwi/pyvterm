@@ -51,7 +51,6 @@ from collections.abc import Iterator
 import numpy as np
 
 from pyvterm import (
-    DEFAULT_BAUDRATE,
     DEFAULT_BOUNDS,
     DEFAULT_PORT,
     DEFAULT_SYNC_BYTE,
@@ -555,7 +554,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
-    out.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
+    out.add_argument(
+        "--baud",
+        default="auto",
+        help="line rate, or 'auto' (default) to detect the receiver's baud",
+    )
     out.add_argument(
         "--no-flow-control",
         action="store_true",

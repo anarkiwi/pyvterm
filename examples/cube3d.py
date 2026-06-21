@@ -42,7 +42,7 @@ from __future__ import annotations
 import argparse
 import math
 
-from pyvterm import DEFAULT_BAUDRATE, DEFAULT_PORT, MemoryTransport, VectorTerminal
+from pyvterm import DEFAULT_PORT, MemoryTransport, VectorTerminal
 
 # The eight corners of a cube centred on the origin, half-width 1.
 VERTICES: list[tuple[float, float, float]] = [
@@ -187,7 +187,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     out = parser.add_argument_group("output")
     out.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
-    out.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
+    out.add_argument(
+        "--baud",
+        default="auto",
+        help="line rate, or 'auto' (default) to detect the receiver's baud",
+    )
     out.add_argument(
         "--fps",
         default="auto",

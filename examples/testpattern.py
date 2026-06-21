@@ -39,7 +39,6 @@ import math
 import time
 
 from pyvterm import (
-    DEFAULT_BAUDRATE,
     DEFAULT_PORT,
     DEFAULT_SYNC_BYTE,
     MemoryTransport,
@@ -92,9 +91,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
     p.add_argument(
         "--baud",
-        type=int,
-        default=DEFAULT_BAUDRATE,
-        help="line rate (match the receiver)",
+        default="auto",
+        help="line rate, or 'auto' (default) to detect the receiver's baud",
     )
     p.add_argument("--intensity", type=int, default=4, help="beam brightness 0-15 (keep it low)")
     p.add_argument(

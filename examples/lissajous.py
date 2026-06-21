@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import math
 
-from pyvterm import DEFAULT_BAUDRATE, DEFAULT_PORT, MemoryTransport, VectorTerminal
+from pyvterm import DEFAULT_PORT, MemoryTransport, VectorTerminal
 
 
 def lissajous_points(
@@ -53,7 +53,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--port", default=DEFAULT_PORT, help="serial device path")
-    parser.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
+    parser.add_argument(
+        "--baud",
+        default="auto",
+        help="line rate, or 'auto' (default) to detect the receiver's baud",
+    )
     parser.add_argument("-a", type=float, default=3.0, help="X frequency ratio")
     parser.add_argument("-b", type=float, default=2.0, help="Y frequency ratio")
     parser.add_argument("--samples", type=int, default=400, help="points per figure")

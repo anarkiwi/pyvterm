@@ -35,6 +35,8 @@ from .protocol import (
 )
 from .terminal import VectorTerminal
 from .transport import (
+    BAUD_AUTO,
+    DEFAULT_BAUD_CANDIDATES,
     DEFAULT_BAUDRATE,
     DEFAULT_PORT,
     DEFAULT_SYNC_BYTE,
@@ -58,6 +60,8 @@ __all__ = [
     "FrameTiming",
     "DEFAULT_PORT",
     "DEFAULT_BAUDRATE",
+    "DEFAULT_BAUD_CANDIDATES",
+    "BAUD_AUTO",
     "DEFAULT_SYNC_BYTE",
     # protocol + geometry
     "protocol",
