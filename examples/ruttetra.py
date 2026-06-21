@@ -329,6 +329,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out.add_argument("--baud", type=int, default=DEFAULT_BAUDRATE, help="nominal baud rate")
     out.add_argument("--fps", type=float, default=18.0, help="target frames per second")
     out.add_argument(
+        "--adaptive-fps",
+        action="store_true",
+        help="cap the rate at what the device reports it can draw (vekterm v2 timing)",
+    )
+    out.add_argument(
         "--frames", type=int, default=0, help="frames to run (0 = until end / forever)"
     )
     out.add_argument("--dry-run", action="store_true", help="don't open a serial port")
@@ -422,8 +427,14 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(f"frame {drawn:>4}: {len(last):>5} bytes, {vectors} vectors")
             drawn += 1
-            if period:
-                time.sleep(period)
+            # Never push frames faster than the receiver can draw them: vekterm
+            # reports the last frame's draw time in its sync reply, so a complex
+            # scene (high draw_us) automatically slows the send rate.
+            delay = period
+            if args.adaptive_fps and terminal.last_timing is not None:
+                delay = max(period, terminal.last_timing.draw_us / 1_000_000)
+            if delay:
+                time.sleep(delay)
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

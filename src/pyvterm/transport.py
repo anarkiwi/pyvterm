@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import abc
 import time
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import protocol
@@ -18,6 +19,7 @@ __all__ = [
     "Transport",
     "MemoryTransport",
     "SerialTransport",
+    "FrameTiming",
     "DEFAULT_BAUDRATE",
     "DEFAULT_PORT",
     "DEFAULT_SYNC_BYTE",
@@ -28,12 +30,52 @@ DEFAULT_BAUDRATE = 2_000_000
 #: Default device path created by the USB-DVG / pitrex CDC gadget on Linux.
 DEFAULT_PORT = "/dev/ttyACM0"
 #: Byte a flow-controlled receiver (e.g. vekterm on a raw UART) sends to say
-#: "ready for the next frame". USB-CDC devices don't need this; raw-UART ones do.
+#: "ready for the next frame" on the base (v1) protocol. USB-CDC devices don't
+#: need this; raw-UART ones do.
 DEFAULT_SYNC_BYTE = 0x06  # ASCII ACK
+#: Length of the v2 sync record (draw_us u16, vectors u16, flags u8), big-endian.
+#: Once v2 is negotiated, the receiver sends this fixed record *instead of* the
+#: bare sync byte; its arrival is the readiness signal. Not parseable by a v1
+#: sender by design — cross-version safety comes from negotiation, not framing.
+_SYNC_V2_LEN = 5
+#: Sync-record flag bits (last byte of the record).
+_SYNC_FLAG_OVERFLOW = 0x01
+_SYNC_FLAG_IDLE = 0x02
+
+
+@dataclass(frozen=True)
+class FrameTiming:
+    """How long the receiver took to draw the last frame it was sent.
+
+    Decoded from the receiver's sync reply (vekterm v2). ``draw_us`` lets a
+    sender adapt its frame rate to scene complexity: a frame that takes longer to
+    draw than the link's per-frame budget should be sent less often (or
+    simplified). ``idle`` is set when the receiver is showing its splash (e.g. it
+    timed out waiting for data), so a stream restart can be detected.
+    """
+
+    draw_us: int
+    vectors: int
+    overflow: bool
+    idle: bool
+
+    @property
+    def max_fps(self) -> float:
+        """Upper bound on sustainable fps implied by the draw time alone.
+
+        ``0`` draw time (no frame drawn yet, or instantaneous) yields ``inf``.
+        This ignores transfer time; it is the ceiling the *draw* imposes.
+        """
+        return float("inf") if self.draw_us <= 0 else 1_000_000.0 / self.draw_us
 
 
 class Transport(abc.ABC):
     """Minimal sink for outgoing protocol bytes."""
+
+    #: Most recent frame-draw timing reported by the receiver, or ``None`` if the
+    #: device doesn't report timing (a v1 receiver, a USB-CDC device, or none).
+    #: Populated by transports that read a sync reply (:class:`SerialTransport`).
+    last_timing: FrameTiming | None = None
 
     @abc.abstractmethod
     def write(self, data: bytes) -> int:
@@ -145,6 +187,13 @@ class SerialTransport(Transport):
         self.flow_control = None if flow_control is None else (flow_control & 0xFF)
         self.sync_timeout = sync_timeout
         self._flow_seen = False  # have we ever received the ready byte?
+        #: Set once a v2 device answers the HELLO probe: the per-frame reply then
+        #: switches from the bare sync byte to the fixed timing record.
+        self._v2 = False
+        #: Rolling buffer of unparsed v2 sync-record bytes (handles split reads).
+        self._sync_buf = bytearray()
+        #: Most recent decoded :class:`FrameTiming`, or ``None`` until one arrives.
+        self.last_timing: FrameTiming | None = None
         #: Diagnostics: frames actually transmitted vs skipped (no ready byte).
         self.frames_sent = 0
         self.frames_skipped = 0
@@ -192,20 +241,65 @@ class SerialTransport(Transport):
             buf += chunk
             descriptor = protocol.decode_hello_descriptor(bytes(buf))
             if descriptor is not None:
+                # v2 is now active: the receiver's per-frame reply becomes the
+                # compact timing record. Drop any sync bytes buffered before the
+                # switch so the next read starts on a fresh record boundary.
+                self._v2 = True
+                self._flow_seen = True
+                self._sync_buf.clear()
+                reset = getattr(self._serial, "reset_input_buffer", None)
+                if callable(reset):
+                    reset()
                 return descriptor
         return None
 
-    def _wait_ready(self) -> bool:
-        """Block until the receiver sends the flow-control sync byte.
+    def _parse_timing(self, record: bytes) -> None:
+        """Decode a 5-byte v2 sync record (draw_us, vectors, flags) into state."""
+        draw_us = (record[0] << 8) | record[1]
+        vectors = (record[2] << 8) | record[3]
+        flags = record[4]
+        self.last_timing = FrameTiming(
+            draw_us=draw_us,
+            vectors=vectors,
+            overflow=bool(flags & _SYNC_FLAG_OVERFLOW),
+            idle=bool(flags & _SYNC_FLAG_IDLE),
+        )
 
-        Returns ``True`` once seen. On timeout: if we've *never* seen the byte the
-        receiver doesn't speak the handshake (e.g. a USB-CDC device), so flow
-        control auto-disables and we stream from now on; otherwise the handshake
-        is in use and we return ``False`` so the caller skips the frame rather
-        than overrun the receiver.
+    def _wait_ready_v2(self) -> bool:
+        """Read one fixed v2 sync record; its arrival is the readiness signal.
+
+        Accumulates across reads (the record can straddle reads), decodes the
+        first complete record into :attr:`last_timing`, and keeps any surplus
+        bytes for the next frame. Returns ``False`` on timeout (a negotiated
+        device speaks the handshake, so the caller skips the frame rather than
+        overrunning it — flow control is never auto-disabled in v2).
+        """
+        deadline = time.monotonic() + self.sync_timeout
+        while len(self._sync_buf) < _SYNC_V2_LEN and time.monotonic() < deadline:
+            waiting = getattr(self._serial, "in_waiting", 0) or 1
+            chunk = self._serial.read(waiting)
+            if chunk:
+                self._sync_buf += chunk
+        if len(self._sync_buf) < _SYNC_V2_LEN:
+            return False
+        self._parse_timing(bytes(self._sync_buf[:_SYNC_V2_LEN]))
+        del self._sync_buf[:_SYNC_V2_LEN]
+        return True
+
+    def _wait_ready(self) -> bool:
+        """Block until the receiver signals it is ready for the next frame.
+
+        On a negotiated v2 device, readiness is the arrival of the compact timing
+        record (decoded into :attr:`last_timing`). On the base protocol it is the
+        sync byte. On timeout: if we've *never* seen readiness the receiver
+        doesn't speak the handshake (e.g. a USB-CDC device), so flow control
+        auto-disables and we stream from now on; otherwise we return ``False`` so
+        the caller skips the frame rather than overrun the receiver.
         """
         if self.flow_control is None:
             return True
+        if self._v2:
+            return self._wait_ready_v2()
         deadline = time.monotonic() + self.sync_timeout
         while time.monotonic() < deadline:
             waiting = getattr(self._serial, "in_waiting", 0) or 1

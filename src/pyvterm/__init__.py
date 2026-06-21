@@ -38,12 +38,13 @@ from .transport import (
     DEFAULT_BAUDRATE,
     DEFAULT_PORT,
     DEFAULT_SYNC_BYTE,
+    FrameTiming,
     MemoryTransport,
     SerialTransport,
     Transport,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "__version__",
@@ -54,6 +55,7 @@ __all__ = [
     "Transport",
     "SerialTransport",
     "MemoryTransport",
+    "FrameTiming",
     "DEFAULT_PORT",
     "DEFAULT_BAUDRATE",
     "DEFAULT_SYNC_BYTE",

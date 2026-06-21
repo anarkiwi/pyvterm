@@ -94,6 +94,68 @@ def test_serial_transport_flow_control_sends_after_ready():
     assert transport.flow_control == 0x06  # stays on once the byte is seen
 
 
+def test_serial_transport_v2_decodes_timing_record():
+    # Once v2 is negotiated, the receiver's reply IS the 5-byte timing record
+    # (draw_us=0x04D2=1234, vectors=0x0064=100, flags=0) — no sync byte, no
+    # marker. Its arrival is the readiness signal, so the frame sends.
+    transport, fake = _make(flow_control=0x06, sync_timeout=0.5)
+    transport._v2 = True
+    fake.read = lambda n=1: b"\x04\xd2\x00\x64\x00"  # type: ignore[assignment]
+    assert transport.write(b"\x01\x02\x03\x04") == 4
+    assert transport.frames_sent == 1
+    timing = transport.last_timing
+    assert timing is not None
+    assert timing.draw_us == 1234
+    assert timing.vectors == 100
+    assert timing.overflow is False
+    assert timing.idle is False
+    assert abs(timing.max_fps - 1_000_000 / 1234) < 1e-6
+
+
+def test_serial_transport_v2_timing_flags_overflow_and_idle():
+    transport, fake = _make(flow_control=0x06, sync_timeout=0.5)
+    transport._v2 = True
+    # flags = overflow|idle (0x03), draw_us=0, vectors=0.
+    fake.read = lambda n=1: b"\x00\x00\x00\x00\x03"  # type: ignore[assignment]
+    assert transport.write(b"\x01\x02\x03\x04") == 4
+    timing = transport.last_timing
+    assert timing is not None
+    assert timing.overflow is True
+    assert timing.idle is True
+    assert timing.max_fps == float("inf")
+
+
+def test_serial_transport_v2_record_split_across_reads():
+    # The record arrives in fragments; the transport reassembles it and only
+    # releases the frame once the whole 5-byte record has been read.
+    transport, fake = _make(flow_control=0x06, sync_timeout=0.5)
+    transport._v2 = True
+    chunks = iter([b"\x04", b"\xd2\x00", b"\x64\x00"])
+    fake.read = lambda n=1: next(chunks, b"")  # type: ignore[assignment]
+    assert transport.write(b"\x01\x02\x03\x04") == 4
+    assert transport.frames_sent == 1
+    timing = transport.last_timing
+    assert timing is not None
+    assert timing.draw_us == 1234
+    assert timing.vectors == 100
+
+
+def test_serial_transport_v2_surplus_bytes_kept_for_next_frame():
+    # Two records arrive in one read; the second is buffered for the next frame.
+    transport, fake = _make(flow_control=0x06, sync_timeout=0.5)
+    transport._v2 = True
+    reads = iter([b"\x04\xd2\x00\x64\x00\x00\x10\x00\x20\x02"])
+    fake.read = lambda n=1: next(reads, b"")  # type: ignore[assignment]
+    assert transport.write(b"\x01\x02\x03\x04") == 4
+    assert transport.last_timing is not None
+    assert transport.last_timing.draw_us == 1234
+    # Second frame consumes the buffered record without another read.
+    assert transport.write(b"\x05\x06\x07\x08") == 4
+    assert transport.last_timing.draw_us == 0x0010
+    assert transport.last_timing.vectors == 0x0020
+    assert transport.last_timing.idle is True
+
+
 def test_serial_transport_flow_control_auto_disables_without_ready():
     # FakeSerial.read returns zero bytes (never the 0x06): on timeout the handshake
     # is assumed absent (USB-CDC), so flow control disables and the frame streams.

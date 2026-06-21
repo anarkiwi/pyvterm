@@ -249,6 +249,64 @@ critical path for streaming content.
 4. **`POLYLINE`** (§5) — universal ~2× for non-grid strokes.
 5. **Temporal deltas** (§7) — deferred.
 
+## 11. Keepalive (`CMD` subcommand `'K'`)
+
+The baremetal receiver runs a **global inactivity timeout** (30 s by default):
+with no new frame for that long it drops the held frame and returns to its
+splash, so a stale image never lingers after a sender disconnects or crashes.
+That interacts badly with **frame suppression** (§6): a legitimately *static*
+scene sends nothing, and would be mistaken for a dead sender.
+
+The keepalive resolves it. It is a single `CMD` word with subcommand `'K'`
+(`0x4B`) — collision-free in the same slot as the `HELLO` probe (`'V'`):
+
+```
+word = (0x5 << 29) | 0x4B          // = 0xA000004B
+```
+
+It carries no geometry: the receiver treats it as proof the sender is alive
+(resetting the timeout) **without changing the drawn frame**, and it satisfies
+the per-frame flow-control handshake exactly like a frame would (so the receiver
+issues the next sync promptly). A suppressing sender emits one keepalive per
+handshake while the scene is unchanged. pyvterm exposes
+`protocol.keepalive()` and `VectorTerminal.send_keepalive()`; vekterm decodes it
+via `vt_is_keepalive` and a new `on_keepalive` sink callback. A v1 device ignores
+the unknown `CMD` subcommand, so the ping is harmless to send blindly.
+
+## 12. Frame-timing in the sync reply (adaptive frame rate)
+
+The per-frame flow-control reply (the receiver's "ready for the next frame"
+signal) is upgraded, **once v2 is negotiated**, to carry **how long the receiver
+took to draw the last frame**, so a sender can adapt its frame rate to the
+scene's complexity rather than guessing a fixed fps.
+
+This is an *efficient* change, not a back-compatible one: rather than bolting a
+record onto the base `0x06` sync byte, a negotiated v2 receiver replaces the
+sync byte **wholesale** with a compact fixed 5-byte record. Its arrival is the
+readiness signal — there is no sync byte and no marker to spend bytes on:
+
+```
+ byte 0..1  draw_us  u16   microseconds spent drawing the last frame (BE)
+ byte 2..3  vectors  u16   vectors in the last frame (BE)
+ byte 4     flags    u8    bit0 overflow, bit1 idle (splash drawn)
+```
+
+Cross-version safety comes from **negotiation, not framing**, exactly like the
+EXT subtypes (§2): the receiver only sends the record to a peer that issued the
+`HELLO` probe; an un-negotiated peer keeps getting the plain `0x06` sync byte, so
+the base DVG flow control ([`PROTOCOL.md`](PROTOCOL.md) handshake) is untouched.
+
+`draw_us` is the analog beam time the held frame costs **per refresh** — the real
+ceiling on frame rate (§9), which the wire byte-budget tables don't capture.
+pyvterm reads the record in `SerialTransport` (switched on by a successful
+`probe_capabilities`) and surfaces it as `VectorTerminal.last_timing` (a
+`FrameTiming` with a `max_fps` helper); a sender throttles with e.g.
+`sleep(max(0, target_dt - draw_us/1e6))` (see `examples/ruttetra.py
+--adaptive-fps`). The `idle` flag lets a sender notice the receiver fell back to
+its splash (timeout, §11) and restart the stream. vekterm emits the record from
+`send_sync_reply` in the baremetal draw loop, timing the draw with the 1 MHz
+system timer.
+
 ## References
 
 * Base wire protocol — [`PROTOCOL.md`](PROTOCOL.md)

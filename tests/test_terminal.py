@@ -33,6 +33,20 @@ def test_send_frame_returns_bytes_then_resets():
     assert vt.send_frame() == EMPTY_FRAME
 
 
+def test_send_keepalive_writes_keepalive_word():
+    mt = MemoryTransport()
+    vt = VectorTerminal(transport=mt)
+    assert vt.send_keepalive() == protocol.keepalive()
+    assert mt.getvalue() == protocol.keepalive()
+    # A keepalive must not poison duplicate-suppression of real frames.
+    assert vt._last_sent is None
+
+
+def test_last_timing_defaults_to_none():
+    vt = VectorTerminal(transport=MemoryTransport())
+    assert vt.last_timing is None
+
+
 def test_close_sends_exit_and_closes_transport():
     mt = MemoryTransport()
     vt = VectorTerminal(transport=mt)
