@@ -42,7 +42,7 @@ from __future__ import annotations
 import argparse
 import math
 
-from pyvterm import DEFAULT_PORT, MemoryTransport, VectorTerminal
+from pyvterm import DEFAULT_PORT, MemoryTransport, VectorTerminal, debug
 
 # The eight corners of a cube centred on the origin, half-width 1.
 VERTICES: list[tuple[float, float, float]] = [
@@ -202,6 +202,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
     out.add_argument("--width", type=int, default=480, help="preview width (px)")
     out.add_argument("--height", type=int, default=360, help="preview height (px)")
+    debug.add_debug_argument(out)
     return parser.parse_args(argv)
 
 
@@ -241,9 +242,11 @@ def main(argv: list[str] | None = None) -> int:
         terminal = VectorTerminal(transport=MemoryTransport())
         print("[dry run] no serial port opened")
     else:
-        print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
+        if args.debug:
+            print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
         terminal = VectorTerminal(port=args.port, baudrate=args.baud)
 
+    reporter = debug.reporter_for(terminal, args.debug)
     drawn = 0
     try:
         while args.frames == 0 or drawn < args.frames:
@@ -256,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"{vectors} vectors, dist={cube.distance_at(drawn):4.1f}"
                 )
             drawn += 1
+            if reporter:
+                reporter.tick()
             terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")

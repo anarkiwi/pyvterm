@@ -42,6 +42,7 @@ from pyvterm import (
     Capability,
     MemoryTransport,
     VectorTerminal,
+    debug,
     ext,
 )
 from pyvterm.protocol import scale_color
@@ -346,6 +347,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     out.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
     out.add_argument("--width", type=int, default=440, help="preview width (px)")
     out.add_argument("--height", type=int, default=330, help="preview height (px)")
+    debug.add_debug_argument(out)
     return parser.parse_args(argv)
 
 
@@ -396,19 +398,21 @@ def main(argv: list[str] | None = None) -> int:
         terminal = VectorTerminal(transport=MemoryTransport())
         print("[dry run] no serial port opened")
     else:
-        print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
+        if args.debug:
+            print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
         terminal = VectorTerminal(port=args.port, baudrate=args.baud)
         # Detect a v2 (vekterm) device so --heightfield can use the compact EXT
         # path; a plain USB-DVG leaves capabilities None and we fall back.
         desc = terminal.negotiate()
-        if desc is not None:
+        if args.debug and desc is not None:
             print(f"Detected vekterm v{desc.version}; capabilities=0x{desc.capabilities:02x}")
-        elif args.heightfield:
+        elif args.debug and args.heightfield:
             print("No v2 device detected; --heightfield will fall back to base XY frames.")
 
-    if args.heightfield and not terminal.supports(Capability.HEIGHTFIELD):
+    if args.debug and args.heightfield and not terminal.supports(Capability.HEIGHTFIELD):
         print("(heightfield encoded then expanded to base XY — no on-wire savings without vekterm)")
 
+    reporter = debug.reporter_for(terminal, args.debug)
     drawn = 0
     kwargs: dict = {}
     try:
@@ -434,6 +438,8 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(f"frame {drawn:>4}: {len(last):>5} bytes, {vectors} vectors")
             drawn += 1
+            if reporter:
+                reporter.tick()
             # Pace the stream: a numeric --fps caps the rate; "auto" lets flow
             # control (and vekterm's v2 draw-time timing) set it from the device.
             terminal.pace(fps)

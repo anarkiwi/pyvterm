@@ -19,7 +19,8 @@ For tests and dry runs, pass a :class:`MemoryTransport` instead of a port.
 
 from __future__ import annotations
 
-from . import ext, geometry, protocol
+from . import debug, ext, geometry, protocol
+from .debug import DebugReporter
 from .frame import FrameBuilder
 from .geometry import clip_line, vector_length
 from .protocol import (
@@ -53,6 +54,7 @@ __all__ = [
     # high level
     "VectorTerminal",
     "FrameBuilder",
+    "DebugReporter",
     # transports
     "Transport",
     "SerialTransport",
@@ -67,6 +69,7 @@ __all__ = [
     "protocol",
     "geometry",
     "ext",
+    "debug",
     "Flag",
     "ExtSubtype",
     "Capability",

@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 import math
 
-from pyvterm import DEFAULT_PORT, MemoryTransport, VectorTerminal
+from pyvterm import DEFAULT_PORT, MemoryTransport, VectorTerminal, debug
 
 
 def lissajous_points(
@@ -83,6 +83,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--preview", metavar="OUT.png", help="render an animated PNG and exit")
     parser.add_argument("--width", type=int, default=440, help="preview width (px)")
     parser.add_argument("--height", type=int, default=330, help="preview height (px)")
+    debug.add_debug_argument(parser)
     return parser.parse_args(argv)
 
 
@@ -112,9 +113,11 @@ def main(argv: list[str] | None = None) -> int:
         terminal = VectorTerminal(transport=MemoryTransport())
         print("[dry run] no serial port opened; printing frame sizes")
     else:
-        print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
+        if args.debug:
+            print(f"Opening {args.port} at {args.baud} baud (waiting for the device to settle)...")
         terminal = VectorTerminal(port=args.port, baudrate=args.baud)
 
+    reporter = debug.reporter_for(terminal, args.debug)
     delta = 0.0
     drawn = 0
     try:
@@ -133,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
 
             delta += args.speed
             drawn += 1
+            if reporter:
+                reporter.tick()
             terminal.pace(fps)
     except KeyboardInterrupt:
         print("\nInterrupted.")
