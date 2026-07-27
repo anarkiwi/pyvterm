@@ -1,5 +1,7 @@
 """Tests for the high-level VectorTerminal using an in-memory transport."""
 
+import pytest
+
 import pyvterm.terminal as terminal_mod
 from pyvterm import FrameTiming, MemoryTransport, VectorTerminal, protocol
 
@@ -48,35 +50,79 @@ def test_last_timing_defaults_to_none():
     assert vt.last_timing is None
 
 
-def test_pace_numeric_sleeps_one_over_fps(monkeypatch):
-    calls: list[float] = []
-    monkeypatch.setattr(terminal_mod.time, "sleep", calls.append)
+class _FakeClock:
+    """Deterministic ``time`` stand-in: sleeping advances the clock."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.slept: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.t
+
+    def sleep(self, d: float) -> None:
+        assert d >= 0
+        self.slept.append(d)
+        self.t += d
+
+    def work(self, d: float) -> None:
+        self.t += d
+
+
+def _clock(monkeypatch) -> _FakeClock:
+    clk = _FakeClock()
+    monkeypatch.setattr(terminal_mod.time, "monotonic", clk.monotonic)
+    monkeypatch.setattr(terminal_mod.time, "sleep", clk.sleep)
+    return clk
+
+
+def test_pace_numeric_floors_the_frame_period(monkeypatch):
+    # The deadline pacer floors the *period* at 1/fps; the first call only sets
+    # the baseline, so the sleep lands once a prior frame exists.
+    clk = _clock(monkeypatch)
     vt = VectorTerminal(transport=MemoryTransport())
+    vt.pace(50.0)  # baseline, no sleep
+    clk.work(0.005)  # 5 ms of frame work
     vt.pace(50.0)
-    assert calls == [1.0 / 50.0]
+    assert clk.slept == [pytest.approx(1.0 / 50.0 - 0.005)]  # sleep tops up to 20 ms
 
 
-def test_pace_auto_adds_no_sleep_under_flow_control(monkeypatch):
-    # An active handshake already paces the loop, so auto adds no sleep.
-    calls: list[float] = []
-    monkeypatch.setattr(terminal_mod.time, "sleep", calls.append)
+def test_pace_auto_uses_draw_time_even_under_flow_control(monkeypatch):
+    # The handshake only signals receive-readiness; draw_us paces us to the beam's
+    # real draw rate so a heavy scene can't outrun it. This is honoured *with* flow
+    # control on (the case that previously ignored draw_us and let the display lag).
+    clk = _clock(monkeypatch)
+    mt = MemoryTransport()
+    mt.flow_control = 0x06  # type: ignore[attr-defined]
+    mt.last_timing = FrameTiming(draw_us=20_000, vectors=10, overflow=False, idle=False)
+    vt = VectorTerminal(transport=mt)
+    vt.pace(None)  # baseline
+    vt.pace(None)  # ~0 work -> sleep a full draw period
+    assert clk.slept == [pytest.approx(20_000 / 1_000_000)]
+
+
+def test_pace_auto_never_slows_a_lockstep_receiver(monkeypatch):
+    # If the loop already spends longer than draw_us (e.g. a genuinely lockstep
+    # handshake), no extra sleep is added -- the period is not double-charged.
+    clk = _clock(monkeypatch)
+    mt = MemoryTransport()
+    mt.last_timing = FrameTiming(draw_us=20_000, vectors=10, overflow=False, idle=False)
+    vt = VectorTerminal(transport=mt)
+    vt.pace(None)  # baseline
+    clk.work(0.050)  # 50 ms of work > 20 ms target
+    vt.pace(None)
+    assert clk.slept == []
+
+
+def test_pace_auto_no_timing_adds_no_sleep(monkeypatch):
+    # With no reported draw time there is nothing to pace to.
+    clk = _clock(monkeypatch)
     mt = MemoryTransport()
     mt.flow_control = 0x06  # type: ignore[attr-defined]
     vt = VectorTerminal(transport=mt)
     vt.pace(None)
-    assert calls == []
-
-
-def test_pace_auto_falls_back_to_draw_time_without_back_pressure(monkeypatch):
-    # No flow control: auto pacing uses the device-reported draw time.
-    calls: list[float] = []
-    monkeypatch.setattr(terminal_mod.time, "sleep", calls.append)
-    mt = MemoryTransport()
-    mt.flow_control = None  # type: ignore[attr-defined]
-    mt.last_timing = FrameTiming(draw_us=20_000, vectors=10, overflow=False, idle=False)
-    vt = VectorTerminal(transport=mt)
     vt.pace(None)
-    assert calls == [20_000 / 1_000_000]
+    assert clk.slept == []
 
 
 def test_close_sends_exit_and_closes_transport():

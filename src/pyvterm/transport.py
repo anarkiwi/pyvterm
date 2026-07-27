@@ -36,10 +36,10 @@ BAUD_AUTO = "auto"
 #: ``VT_BAUD_OPTIONS`` so a raw-UART receiver is found whatever the operator set
 #: on its splash; the matching rate is the one whose HELLO probe gets a reply.
 DEFAULT_BAUD_CANDIDATES = (1_280_000, 2_000_000, 1_000_000, 921_600, 500_000, 115_200)
-#: Default serial device path. ``/dev/ttyUSB0`` is the usual USB-TTL adapter to a
-#: raw-UART receiver (e.g. vekterm on a PiTrex); a USB-CDC USB-DVG gadget instead
-#: appears as ``/dev/ttyACM0`` — pass ``port=`` to override.
-DEFAULT_PORT = "/dev/ttyUSB0"
+#: Default serial device path. ``/dev/ttyACM0`` is the USB-CDC USB-DVG gadget; a
+#: USB-TTL adapter to a raw-UART receiver (e.g. vekterm on a PiTrex) instead
+#: appears as ``/dev/ttyUSB0`` — pass ``port=`` to override.
+DEFAULT_PORT = "/dev/ttyACM0"
 #: Byte a flow-controlled receiver (e.g. vekterm on a raw UART) sends to say
 #: "ready for the next frame" on the base (v1) protocol. USB-CDC devices don't
 #: need this; raw-UART ones do.

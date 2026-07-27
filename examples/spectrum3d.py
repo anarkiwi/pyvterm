@@ -218,7 +218,8 @@ class Analyzer:
         n_bins: int = DEFAULT_BINS,
         f_min: float = 40.0,
         f_max: float = DEFAULT_FMAX,
-        tilt_db_per_oct: float = 3.0,
+        tilt_db_per_oct: float = 4.5,
+        dyn_range_db: float = 48.0,
     ) -> None:
         self.window = np.hanning(frame_size).astype(np.float32)
         freqs = np.fft.rfftfreq(frame_size, 1.0 / sample_rate)
@@ -226,35 +227,45 @@ class Analyzer:
         self._bins = [
             np.where((freqs >= edges[i]) & (freqs < edges[i + 1]))[0] for i in range(n_bins)
         ]
-        # Spectral tilt ("pink-noise" pre-emphasis). Music and most real signals
-        # fall ~3 dB/octave toward higher frequencies, so the low end carries far
-        # more energy and dominates any global normalisation — the bass bins peg
-        # full-height and everything above them reads as flat. Pre-emphasising by
-        # +tilt_db_per_oct dB/octave flattens that natural slope so every band
-        # gets a fair share of the display. Centres are the geometric mean of
-        # each bin's edges; weight ∝ (f / f0) ** (tilt_db / 6.02 per octave).
         centers = np.sqrt(edges[:-1] * edges[1:])
-        octaves = np.log2(centers / centers[0])
-        self._tilt = (10.0 ** (tilt_db_per_oct * octaves / 20.0)).astype(np.float32)
+        # Under-resolved low bands are narrower than the FFT's Hz/bin and so hold
+        # no FFT bins; they would render as dead notches. Fall back to the nearest
+        # FFT bin at the band centre so the low end stays continuous.
+        self._fallback = np.clip(
+            np.round(centers * frame_size / sample_rate).astype(int), 0, freqs.size - 1
+        )
+        # Spectral tilt ("pink-noise" pre-emphasis) as an *additive* dB offset per
+        # band. Music falls ~3 dB/octave toward higher frequencies, so the low end
+        # dominates a global normalisation and everything above reads flat. Adding
+        # +tilt_db_per_oct dB/octave lifts the highs, and because the auto-gain
+        # ceiling below is set from the whole (post-tilt) spectrum, lifting the
+        # highs actually pushes the bass *down* the display rather than merely
+        # boosting the top — so the knob tames bass instead of chasing it.
+        self._tilt_db = (tilt_db_per_oct * np.log2(centers / centers[0])).astype(np.float32)
+        self.dyn_range = dyn_range_db
         self.n_bins = n_bins
         self._level = np.zeros(n_bins, dtype=np.float32)
-        self._peak = 1e-6
+        self._peak: float | None = None  # rolling dB ceiling (fast attack, slow release)
 
     def process(self, samples: np.ndarray) -> np.ndarray:
         spectrum = np.abs(np.fft.rfft(samples * self.window))
-        mags = np.array(
-            [float(spectrum[idx].mean()) if idx.size else 0.0 for idx in self._bins],
-            dtype=np.float32,
+        # Peak magnitude per band, not the mean: averaging buries a tonal peak
+        # among the wide high bands' noise floor and re-penalises the very highs
+        # the tilt is meant to reveal. Empty bands sample the nearest FFT bin.
+        mags = spectrum[self._fallback].astype(np.float32)
+        for i, idx in enumerate(self._bins):
+            if idx.size:
+                mags[i] = spectrum[idx].max()
+        db = 20.0 * np.log10(mags + 1e-6) + self._tilt_db
+        # Auto-gain in the dB domain: map the top `dyn_range` dB below a rolling
+        # ceiling onto [0, 1]. The ceiling is taken from a high *percentile* (not
+        # the single loudest bin), jumps up instantly on a loud passage, and
+        # releases slowly — so quiet and loud material both fill the display.
+        loud = float(np.percentile(db, 90)) if self.n_bins >= 4 else float(db.max())
+        self._peak = (
+            loud if self._peak is None else max(loud, self._peak + (loud - self._peak) * 0.02)
         )
-        mags = mags * self._tilt  # flatten the bass-heavy spectral slope
-        mags = np.log10(1.0 + mags)
-        # Decaying auto-gain so quiet and loud passages both fill the display.
-        # Normalise to a high *percentile*, not the single loudest bin: one
-        # dominant peak (still, usually, the low end) then can't set the gain for
-        # the whole display and crush every other band to zero.
-        loud = float(np.percentile(mags, 90)) if self.n_bins >= 4 else float(mags.max())
-        self._peak = max(self._peak * 0.995, loud, 1e-6)
-        norm = np.clip(mags / self._peak, 0.0, 1.0)
+        norm = np.clip((db - (self._peak - self.dyn_range)) / self.dyn_range, 0.0, 1.0)
         # Fast attack, slow release.
         rising = norm > self._level
         self._level += (norm - self._level) * np.where(rising, 0.6, 0.18)
@@ -566,9 +577,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     src.add_argument(
         "--tilt",
         type=float,
-        default=3.0,
+        default=4.5,
         help="spectral pre-emphasis (dB/octave) to tame bass dominance; "
-        "0 = none, higher lifts the high end relative to the low",
+        "0 = none, higher pulls the bass down and lifts the high end",
     )
 
     disp = parser.add_argument_group("display")

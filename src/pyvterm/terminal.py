@@ -75,6 +75,9 @@ class VectorTerminal:
         self.frames_suppressed = 0
         #: Capabilities advertised by the device, populated by :meth:`negotiate`.
         self.capabilities: HelloDescriptor | None = None
+        #: Deadline pacer state: the earliest allowed completion time of the next
+        #: frame, in :func:`time.monotonic` seconds (see :meth:`pace`).
+        self._pace_next: float | None = None
 
     @classmethod
     def open(
@@ -167,25 +170,33 @@ class VectorTerminal:
         return getattr(self.transport, "last_timing", None)
 
     def pace(self, fps: float | None) -> None:
-        """Sleep to honour a frame rate, or auto-adapt to the device when ``fps``
-        is ``None``.
+        """Sleep so the frame period is at least the target, or auto-adapt.
 
-        A positive ``fps`` caps the rate at ``1/fps`` seconds per frame. ``None``
-        (or ``<= 0``) means *auto*: when flow control is active the send already
-        blocks until the device signals it is ready, so the loop is paced at the
-        device's true rate and no extra sleep is added; when there is no
-        back-pressure (a USB-CDC device, or flow control auto-disabled) it falls
-        back to the device-reported draw time (:attr:`last_timing`) so a fast
-        sender can't overrun a slow draw.
+        A positive ``fps`` targets ``1/fps`` seconds per frame. ``None`` (or
+        ``<= 0``) means *auto*: target the receiver's own reported beam-draw time
+        (:attr:`last_timing`), so we never feed frames faster than the device can
+        *draw* them. The flow-control handshake only signals *receive*-readiness —
+        the receiver holds and redraws the frame independently (§6 of
+        ``docs/PROTOCOL-EXTENSIONS.md``) — so on a heavy scene a handshake-paced
+        sender still outruns the beam and the picture trails; ``draw_us`` is the
+        number that closes that gap, and it is honoured whether or not flow
+        control is on.
+
+        The target is enforced as a *floor* on the period by a deadline pacer:
+        time already spent blocking on the handshake counts toward it (so it is
+        never double-charged), and if the loop is already slower than the target
+        no sleep is added — a truly lockstep receiver is left untouched.
         """
         if fps is not None and fps > 0:
-            time.sleep(1.0 / fps)
-            return
-        if getattr(self.transport, "flow_control", None) is not None:
-            return  # flow control already paces us at the device's real rate
-        timing = self.last_timing
-        if timing is not None and timing.draw_us > 0:
-            time.sleep(timing.draw_us / 1_000_000)
+            target_dt = 1.0 / fps
+        else:
+            timing = self.last_timing
+            target_dt = timing.draw_us / 1_000_000.0 if timing and timing.draw_us > 0 else 0.0
+        now = time.monotonic()
+        if self._pace_next is not None and now < self._pace_next:
+            time.sleep(self._pace_next - now)
+            now = self._pace_next
+        self._pace_next = now + target_dt
 
     def send_keepalive(self) -> bytes:
         """Send a keepalive ping so an idle receiver holds the current frame.

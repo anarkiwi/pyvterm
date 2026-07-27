@@ -50,9 +50,9 @@ from pyvterm import VectorTerminal
 # Open the serial link (a USB-TTL adapter shows up as /dev/ttyUSB0 on Linux,
 # pyvterm's default; a USB-CDC USB-DVG gadget is /dev/ttyACM0 instead).
 with VectorTerminal(port="/dev/ttyUSB0") as vt:
-    with vt.frame():                 # clears, then sends on exit
-        vt.set_intensity(15)          # full brightness (0 = beam off)
-        vt.polyline(                  # a centred square
+    with vt.frame():  # clears, then sends on exit
+        vt.set_intensity(15)  # full brightness (0 = beam off)
+        vt.polyline(  # a centred square
             [(-200, -200), (200, -200), (200, 200), (-200, 200)],
             closed=True,
         )
@@ -66,10 +66,11 @@ from pyvterm import VectorTerminal, MemoryTransport, protocol
 mem = MemoryTransport()
 vt = VectorTerminal(transport=mem)
 vt.set_intensity(15)
-vt.draw_to(100, 0)                    # pen starts at (0, 0)
+vt.draw_to(100, 0)  # pen starts at (0, 0)
 frame = vt.send_frame()
-print([protocol.decode_word(int.from_bytes(frame[i:i+4], "big"))
-       for i in range(0, len(frame), 4)])
+print(
+    [protocol.decode_word(int.from_bytes(frame[i : i + 4], "big")) for i in range(0, len(frame), 4)]
+)
 ```
 
 ## Coordinate system
