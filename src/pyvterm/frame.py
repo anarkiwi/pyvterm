@@ -138,7 +138,7 @@ class FrameBuilder:
     def polyline(self, points: list[tuple[float, float]], closed: bool = False) -> int:
         """Draw a connected sequence of points; returns the vectors emitted."""
         emitted = 0
-        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
             if self.vector(x0, y0, x1, y1):
                 emitted += 1
         if closed and len(points) > 2:

@@ -13,7 +13,8 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from typing import TYPE_CHECKING, Callable, TextIO
+from collections.abc import Callable
+from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from .terminal import VectorTerminal
